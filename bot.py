@@ -3,7 +3,6 @@ import os
 import re
 import requests
 import pytz
-import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -37,6 +36,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
+WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")  # Добавь в .env
 
 if not TELEGRAM_TOKEN:
     raise ValueError("Ошибка: TELEGRAM_TOKEN не найден в файле .env!")
@@ -60,7 +60,7 @@ ai_client = GigaChat(
 print("GigaChat подключён!")
 
 # ============================================================
-# ===== ЛИЧНОСТЬ ДИЛАНА (БЕЗ ЗВЁЗДОЧЕК) =====
+# ===== ЛИЧНОСТЬ ДИЛАНА =====
 # ============================================================
 CHARACTER_PROMPT = (
     "Ты — Дилан, персонаж из вселенной Лололошки (сезон 'Последняя Реальность'). "
@@ -119,44 +119,42 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА (работает через Яндекс) =====
+# ===== ПОГОДА (OpenWeatherMap) =====
 # ============================================================
 def get_weather(city: str):
+    """Получает погоду через OpenWeatherMap"""
     try:
         import urllib.parse
         city_encoded = urllib.parse.quote(city)
         
-        # Используем Яндекс Погоду (работает в России)
-        url = f"https://api.weather.yandex.ru/v2/forecast?lat=52.0333&lon=113.5000&lang=ru_RU"
-        # Для Читы координаты: 52.0333, 113.5000
-        
-        # Если город Чита — используем координаты
-        if "чита" in city.lower():
-            url = "https://api.weather.yandex.ru/v2/forecast?lat=52.0333&lon=113.5000&lang=ru_RU"
-        elif "москв" in city.lower():
-            url = "https://api.weather.yandex.ru/v2/forecast?lat=55.7558&lon=37.6173&lang=ru_RU"
-        elif "спб" in city.lower() or "санкт" in city.lower():
-            url = "https://api.weather.yandex.ru/v2/forecast?lat=59.9343&lon=30.3351&lang=ru_RU"
-        else:
-            # Для других городов используем wttr.in как запасной вариант
+        # Если нет ключа, используем wttr.in как запасной вариант
+        if not WEATHER_API_KEY:
             wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
             response = requests.get(wttr_url, timeout=10)
             if response.status_code == 200:
                 data = response.text.strip()
                 if data and "Unknown" not in data:
                     return f"Погода в {city}: {data}"
-                return f"Не могу найти погоду для {city}. Проверь название."
-            return f"Не могу найти погоду для {city}."
-            
-        # Для Яндекса нужен ключ, поэтому используем wttr.in как основной
-        wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
-        response = requests.get(wttr_url, timeout=10)
-        if response.status_code == 200:
-            data = response.text.strip()
-            if data and "Unknown" not in data:
-                return f"Погода в {city}: {data}"
+            return f"Не могу найти погоду для {city}. Проверь название или добавь OPENWEATHER_API_KEY в .env"
         
-        return f"Не могу получить погоду для {city}. Попробуй позже."
+        # Основной запрос к OpenWeatherMap
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('main'):
+                temp = data['main']['temp']
+                feels_like = data['main']['feels_like']
+                humidity = data['main']['humidity']
+                wind = data['wind']['speed']
+                weather_desc = data['weather'][0]['description']
+                return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
+        elif response.status_code == 404:
+            return f"Город {city} не найден. Проверь название."
+        else:
+            return f"Ошибка API: {response.status_code}. Попробуй позже."
+            
     except Exception as e:
         return f"Ошибка: {e}"
 
