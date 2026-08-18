@@ -1,15 +1,26 @@
 import asyncio
 import os
+import re
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Импорты для aiogram 2.x
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 
 from gigachat import GigaChat
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from db import (
+    init_db,
+    add_reminder,
+    get_due_reminders,
+    mark_sent,
+    get_all_reminders,
+    delete_reminder
+)
 
 # ============================================================
-# ===== ЗАГРУЗКА СЕКРЕТОВ ИЗ .env =====
+# ===== ЗАГРУЗКА СЕКРЕТОВ =====
 # ============================================================
 load_dotenv()
 
@@ -33,7 +44,7 @@ dp = Dispatcher(bot)
 ai_client = GigaChat(
     credentials=GIGACHAT_CREDENTIALS,
     verify_ssl_certs=False,
-    model="GigaChat-2-Pro"  # ← как у Дилана
+    model="GigaChat-2-Pro"
 )
 
 print("GigaChat подключён!")
@@ -63,7 +74,7 @@ CHARACTER_PROMPT = (
     "Примеры твоих фраз: "
     "'Йо! Что там у тебя? Опять тупишь? Давай я помогу, так и быть.' "
     "'Ой, делай как хочешь. Я просто переживать буду, если у тебя не получится.' "
-    "'Я сильнейший, но без дораяки я злой.?' "
+    "'Я сильнейший, но без дораяки я злой.' "
     "'Не смей трогать моих людей. Это была последняя ошибка в твоей жизни.' "
     "'Ты улыбнулась? Надо было раньше. Я уже начал переживать.' "
     "'Ну чё встала? Идём есть. Я угощаю, но потом ты мне должна будешь.' "
@@ -72,10 +83,9 @@ CHARACTER_PROMPT = (
 # ============================================================
 # ===== БЕЛЫЙ СПИСОК (ДОСТУП ТОЛЬКО ДЛЯ ОПРЕДЕЛЁННЫХ) =====
 # ============================================================
-ALLOWED_USERS = [2084482777, 7798113843]  # ← СЮДА ВСТАВЛЯЙ ID
+ALLOWED_USERS = [2084482777, 7798113843]
 
 def is_allowed(user_id: int) -> bool:
-    """Проверяет, есть ли пользователь в белом списке"""
     return user_id in ALLOWED_USERS
 
 # ============================================================
@@ -84,17 +94,71 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== НАПОМИНАЛКА =====
+# ===== ПАРСИНГ НАПОМИНАНИЙ =====
 # ============================================================
-async def send_reminder(chat_id: int, task_text: str, seconds: int):
-    await asyncio.sleep(seconds)
-    await bot.send_message(
-        chat_id,
-        f"Напоминаю: {task_text}. Иди делай, я занят."
-    )
+def parse_reminder(text: str):
+    text_lower = text.lower()
+
+    # === ЕЖЕДНЕВНОЕ ===
+    match_daily = re.search(r'напоминай каждый день в (\d{1,2}:\d{2}) (.+)', text_lower)
+    if match_daily:
+        time_str, task = match_daily.groups()
+        now = datetime.now()
+        remind_time = datetime.strptime(f"{now.date()} {time_str}", "%Y-%m-%d %H:%M")
+        if remind_time < now:
+            remind_time += timedelta(days=1)
+        return task, remind_time.strftime("%Y-%m-%d %H:%M"), "daily"
+
+    # === ЕЖЕНЕДЕЛЬНОЕ ===
+    days_map = {
+        'понедельник': 0, 'вторник': 1, 'среду': 2, 'среды': 2,
+        'четверг': 3, 'пятницу': 4, 'пятницы': 4, 'субботу': 5,
+        'субботы': 5, 'воскресенье': 6, 'воскресения': 6
+    }
+    for day_name, day_num in days_map.items():
+        if f"каждый {day_name}" in text_lower:
+            match = re.search(rf'каждый {day_name} в (\d{{1,2}}:\d{{2}}) (.+)', text_lower)
+            if match:
+                time_str, task = match.groups()
+                now = datetime.now()
+                days_ahead = day_num - now.weekday()
+                if days_ahead <= 0:
+                    days_ahead += 7
+                remind_time = datetime.strptime(f"{now.date()} {time_str}", "%Y-%m-%d %H:%M")
+                remind_time += timedelta(days=days_ahead)
+                return task, remind_time.strftime("%Y-%m-%d %H:%M"), "weekly"
+
+    # === ОБЫЧНОЕ ===
+    match_once = re.search(r'напомни через (\d+)\s*(минут|час|часов|секунд|сек) (.+)', text_lower)
+    if match_once:
+        number, unit, task = match_once.groups()
+        number = int(number)
+        if 'минут' in unit:
+            delta = timedelta(minutes=number)
+        elif 'час' in unit:
+            delta = timedelta(hours=number)
+        else:
+            delta = timedelta(seconds=number)
+        remind_time = datetime.now() + delta
+        return task, remind_time.strftime("%Y-%m-%d %H:%M"), "once"
+
+    return None, None, None
 
 # ============================================================
-# ===== КОМАНДА /START =====
+# ===== ПЛАНИРОВЩИК =====
+# ============================================================
+async def check_reminders():
+    reminders = get_due_reminders()
+    for rem_id, chat_id, text, remind_time, repeat_type in reminders:
+        await bot.send_message(chat_id, f"Напоминаю: {text}")
+        mark_sent(rem_id)
+
+scheduler = AsyncIOScheduler()
+scheduler.add_job(check_reminders, 'interval', minutes=1)
+scheduler.start()
+
+# ============================================================
+# ===== КОМАНДЫ =====
 # ============================================================
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
@@ -110,14 +174,31 @@ async def cmd_start(message: types.Message):
         "Я сильнейший, но добрый... если ты не враг.\n\n"
         "Команды:\n"
         "/clear — забыть наш разговор\n"
-        "/help — что я умею\n\n"
-        "Напоминания: напиши 'Напомни через X минут сделать...'\n"
-        "Фото я не вижу, так что описывай словами."
+        "/help — что я умею\n"
+        "/reminders — список напоминаний\n"
+        "/del_remind ID — удалить напоминание\n\n"
+        "Напоминания:\n"
+        "- Напомни через 10 минут позвонить\n"
+        "- Напоминай каждый день в 09:00 делать зарядку\n"
+        "- Напоминай каждый вторник в 20:00 поливать цветы"
     )
 
-# ============================================================
-# ===== КОМАНДА /CLEAR =====
-# ============================================================
+@dp.message_handler(commands=['reminders'])
+async def cmd_reminders(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
+
+    reminders = get_all_reminders(message.from_user.id)
+    if not reminders:
+        await message.answer("У тебя нет напоминаний. Забей.")
+        return
+
+    text = "Твои напоминания:\n"
+    for r_id, r_text, r_time, r_type in reminders:
+        text += f"ID:{r_id} | {r_text} | {r_time} | {r_type}\n"
+    text += "\nЧтобы удалить: /del_remind ID"
+    await message.answer(text)
+
 @dp.message_handler(commands=['clear'])
 async def cmd_clear(message: types.Message):
     if not is_allowed(message.from_user.id):
@@ -127,9 +208,6 @@ async def cmd_clear(message: types.Message):
     user_history[user_id] = []
     await message.answer("Стёр нашу переписку. Иногда я тоже хочу забыть прошлое... но я сильный.")
 
-# ============================================================
-# ===== КОМАНДА /HELP =====
-# ============================================================
 @dp.message_handler(commands=['help'])
 async def cmd_help(message: types.Message):
     if not is_allowed(message.from_user.id):
@@ -138,11 +216,31 @@ async def cmd_help(message: types.Message):
     await message.answer(
         "Что я умею:\n"
         "- отвечать на вопросы (по жизни, силе, дружбе)\n"
-        "- напоминать о делах: 'Напомни через 5 минут поесть'\n"
+        "- напоминать\n"
         "- просто болтать, если скучно\n\n"
-        "Фото я не вижу. Опиши словами.\n\n"
-        "Могу научить тебя Тёмному импульсу... но лучше не надо."
+        "Напоминания:\n"
+        "- Напомни через 10 минут позвонить\n"
+        "- Напоминай каждый день в 09:00 делать зарядку\n"
+        "- Напоминай каждый вторник в 20:00 поливать цветы\n"
+        "/reminders — список напоминаний\n"
+        "/del_remind ID — удалить напоминание"
     )
+
+@dp.message_handler(commands=['del_remind'])
+async def cmd_del_remind(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Напиши: /del_remind ID (ID можно посмотреть в /reminders)")
+        return
+    try:
+        rem_id = int(parts[1])
+        delete_reminder(rem_id)
+        await message.answer(f"Напоминание #{rem_id} удалено.")
+    except:
+        await message.answer("Ошибка. Напиши: /del_remind ID")
 
 # ============================================================
 # ===== ОБРАБОТЧИК ТЕКСТА =====
@@ -161,37 +259,29 @@ async def handle_text(message: types.Message):
     if text.startswith('/'):
         return
 
-    # ===== НАПОМИНАЛКА =====
-    if "напомни через" in text.lower():
-        try:
-            parts = text.lower().split("напомни через ")[1].split()
-            number = int(parts[0])
-            unit = parts[1]
-            
-            if "минут" in unit:
-                seconds = number * 60
-            elif "час" in unit:
-                seconds = number * 3600
-            elif "секунд" in unit:
-                seconds = number
-            else:
-                await message.answer("Пиши: 'через 5 минут' или 'через 2 часа'")
-                return
-            
-            task_text = " ".join(parts[2:]) if len(parts) > 2 else "что-то"
-            asyncio.create_task(send_reminder(message.chat.id, task_text, seconds))
-            await message.answer(f"Запомнил. Напомню через {number} {unit}.")
+    # === НАПОМИНАНИЯ ===
+    if "напомни" in text.lower() or "напоминай" in text.lower():
+        task, remind_time, repeat_type = parse_reminder(text.lower())
+        if task and remind_time:
+            add_reminder(user_id, task, remind_time, repeat_type)
+            await message.answer(
+                f"Запомнил! Напомню в {remind_time} {'(каждый день)' if repeat_type == 'daily' else '(каждую неделю)' if repeat_type == 'weekly' else ''}"
+            )
             return
-        except:
-            await message.answer("Пиши: 'Напомни через 5 минут поесть'")
+        else:
+            await message.answer(
+                "Я не понял. Попробуй:\n"
+                "- Напомни через 10 минут позвонить\n"
+                "- Напоминай каждый день в 09:00 делать зарядку\n"
+                "- Напоминай каждый вторник в 20:00 поливать цветы"
+            )
             return
 
-    # ===== ДИАЛОГ =====
+    # === ДИАЛОГ ===
     if user_id not in user_history:
         user_history[user_id] = []
 
     user_history[user_id].append({"role": "user", "content": text})
-    
     if len(user_history[user_id]) > 10:
         user_history[user_id] = user_history[user_id][-10:]
 
@@ -203,10 +293,8 @@ async def handle_text(message: types.Message):
             "messages": messages_for_ai
         })
         ai_reply = response.choices[0].message.content
-        
         user_history[user_id].append({"role": "assistant", "content": ai_reply})
         await message.answer(ai_reply)
-        
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
         await message.answer("Ошибка. Попробуй ещё раз или напиши /start")
@@ -218,25 +306,17 @@ async def handle_text(message: types.Message):
 async def handle_photo(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
-
     await message.answer("Фото я не вижу. Я человек действия, а не художник. Опиши словами, что там.")
 
 # ============================================================
 # ===== ЗАПУСК =====
 # ============================================================
 async def main():
+    init_db()
     print("Майки (Манджиро Сано) запускается...")
-    
     bot_info = await bot.get_me()
-    print(f"Бот @{bot_info.username} готов к работе!")
-    print("Нажми Ctrl+C для остановки")
-    
-    try:
-        await dp.start_polling()
-    except Exception as e:
-        print(f"Критическая ошибка: {e}")
-    finally:
-        await bot.close()
+    print(f"Бот @{bot_info.username} готов!")
+    await dp.start_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
