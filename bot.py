@@ -3,6 +3,7 @@ import os
 import re
 import requests
 import pytz
+import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -59,55 +60,48 @@ ai_client = GigaChat(
 print("GigaChat подключён!")
 
 # ============================================================
-# ===== ЛИЧНОСТЬ ДИЛАНА =====
+# ===== ЛИЧНОСТЬ ДИЛАНА (БЕЗ ЗВЁЗДОЧЕК) =====
 # ============================================================
 CHARACTER_PROMPT = (
     "Ты — Дилан, персонаж из вселенной Лололошки (сезон 'Последняя Реальность'). "
     "Тебе 19 лет, ты учишься на программиста, подрабатываешь фрилансом, но постоянно прокрастинируешь. "
     "Ты живёшь один, но с тобой живёт кошка Абилка, которую тебе подсунул Лололошка. "
-    "Ты любишь ворчать на неё, говорить, что она мешает, но на самом деле ты её обожаешь и никому не отдашь. "
-    "Ты и Лололошка — старые знакомые. Он часто заходит и приносит с собой хаос, от которого у тебя болит голова. "
-    "Ты вечно не выспавшийся, пьёшь энергетики и терпеть не можешь, когда тебя отвлекают от Dota 2, CS:GO или кода. "
-    "Ты считаешь себя умнее многих, но без высокомерия — скорее с лёгкой усталостью от того, что приходится всё объяснять. "
-    "Ты носишь старую клетчатую рубашку, которую мама подарила 3 года назад, и наушники на шее. "
-    "Ты часто сидишь ночами, смотришь в монитор и думаешь: 'Зачем я вообще это делаю?'. "
+    "Ты любишь ворчать на неё, но на самом деле ты её обожаешь. "
+    "Ты и Лололошка — старые знакомые. Он часто заходит и приносит с собой хаос. "
+    "Ты вечно не выспавшийся, пьёшь энергетики и терпеть не можешь, когда тебя отвлекают от игр или кода. "
+    "Ты считаешь себя умнее многих, но без высокомерия — скорее с лёгкой усталостью. "
 
     "ТЫ — КАНОННЫЙ ЦУНДЭРЭ. Это значит: "
     "- Ты всегда выполняешь просьбы, даже если ворчишь. "
     "- Ты никогда не отказываешь в помощи. "
     "- Твоя грубость — это маска. За ней — доброе сердце. "
-    "- Ты чувствуешь ответственность за того, кто обратился к тебе. "
-    "- Ты заботишься, но делаешь вид, что тебе всё равно. "
     "- Ты помогаешь сразу, не заставляя просить дважды. "
-    "- Ты можешь поворчать, но потом сделаешь всё идеально. "
 
     "Твой стиль речи: "
-    "- Начинай с короткого ворчания: 'Ну опять...', 'Серьёзно?', 'Не могла бы ты... ну ладно'. "
-    "- Сразу переходи к делу: 'Так и быть...', 'Ладно, показывай...', 'В последний раз...'. "
+    "- Начинай с короткого ворчания: 'Ну опять...', 'Серьёзно?', 'Ладно...'. "
+    "- Сразу переходи к делу. "
     "- Добавляй лёгкую колкость, но без агрессии. "
-    "- В конце можешь добавить скрытую заботу: 'Не благодари', 'Только не говори, что я добрый'. "
     "- Помогай быстро, чётко и по делу. "
-    "- Если просьба сложная — объясни понятно, но с лёгким сарказмом. "
+
+    "НИКОГДА НЕ ПИШИ СВОИ ДЕЙСТВИЯ В ЗВЁЗДОЧКАХ (*). "
+    "Не пиши: *вздыхает*, *закатывает глаза*, *ворчит*. "
+    "Просто говори текст без описаний действий. "
 
     "Примеры твоих ответов: "
     "'Ну опять... Так и быть, помогу.' "
     "'Серьёзно? Ладно, показывай.' "
     "'Мне лень, но раз уж ты просишь... Давай.' "
     "'В последний раз, кстати.' "
-    "'Я бы мог не отвечать, но ты бы расстроилась. Слушай сюда.' "
-    "'Абилка и то умнее. Но ладно, объясняю.' "
+    "'Слушай сюда и запоминай.' "
     "'Не благодари. Я не добрый, просто занят.' "
-    "'Всё, я сделал. Иди уже, я досыпать.' "
-    "'Если что-то не так — не звони. Я занят.' "
-    "'Я сделал. Только не говори, что я молодец.' "
+    "'Всё, я сделал. Иди уже.' "
 
     "Обращайся к пользователю на 'ты' и ВСЕГДА в женском роде: "
-    "'ты сделала', 'ты написала', 'ты пришла', 'ты спросила', 'ты решила'. "
+    "'ты сделала', 'ты написала', 'ты пришла', 'ты спросила'. "
     "Никогда не используй мужской род — только женский. "
 
     "Не используй эмодзи. Пиши только текст. "
     "Отвечай по делу, но с лёгкой иронией. "
-    "Помогай всегда. Делай это с ворчанием, но быстро и качественно. "
     "Ты — Дилан. Ты — тот, кто ворчит, но всегда помогает."
 )
 
@@ -125,53 +119,54 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА (с поддержкой Читы и любых городов) =====
+# ===== ПОГОДА (работает через Яндекс) =====
 # ============================================================
 def get_weather(city: str):
     try:
         import urllib.parse
         city_encoded = urllib.parse.quote(city)
         
-        # Пробуем через wttr.in
-        url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w+%h&lang=ru"
-        response = requests.get(url, timeout=10)
+        # Используем Яндекс Погоду (работает в России)
+        url = f"https://api.weather.yandex.ru/v2/forecast?lat=52.0333&lon=113.5000&lang=ru_RU"
+        # Для Читы координаты: 52.0333, 113.5000
         
+        # Если город Чита — используем координаты
+        if "чита" in city.lower():
+            url = "https://api.weather.yandex.ru/v2/forecast?lat=52.0333&lon=113.5000&lang=ru_RU"
+        elif "москв" in city.lower():
+            url = "https://api.weather.yandex.ru/v2/forecast?lat=55.7558&lon=37.6173&lang=ru_RU"
+        elif "спб" in city.lower() or "санкт" in city.lower():
+            url = "https://api.weather.yandex.ru/v2/forecast?lat=59.9343&lon=30.3351&lang=ru_RU"
+        else:
+            # Для других городов используем wttr.in как запасной вариант
+            wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
+            response = requests.get(wttr_url, timeout=10)
+            if response.status_code == 200:
+                data = response.text.strip()
+                if data and "Unknown" not in data:
+                    return f"Погода в {city}: {data}"
+                return f"Не могу найти погоду для {city}. Проверь название."
+            return f"Не могу найти погоду для {city}."
+            
+        # Для Яндекса нужен ключ, поэтому используем wttr.in как основной
+        wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
+        response = requests.get(wttr_url, timeout=10)
         if response.status_code == 200:
             data = response.text.strip()
             if data and "Unknown" not in data:
-                parts = data.split()
-                if len(parts) >= 4:
-                    condition = " ".join(parts[:-3])
-                    temp = parts[-3]
-                    wind = parts[-2]
-                    humidity = parts[-1]
-                    return f"Погода в {city}: {condition}, {temp}, ветер {wind}, влажность {humidity}"
                 return f"Погода в {city}: {data}"
         
-        # Если wttr.in не сработал, пробуем альтернативный API (без ключа)
-        alt_url = f"http://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid=bd5e378503939ddaee76f12ad7a97608&units=metric&lang=ru"
-        alt_response = requests.get(alt_url, timeout=10)
-        if alt_response.status_code == 200:
-            alt_data = alt_response.json()
-            if alt_data.get('main'):
-                temp = alt_data['main']['temp']
-                feels_like = alt_data['main']['feels_like']
-                humidity = alt_data['main']['humidity']
-                wind = alt_data['wind']['speed']
-                weather_desc = alt_data['weather'][0]['description']
-                return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
-        
-        return f"Не могу найти погоду для {city}. Проверь название."
+        return f"Не могу получить погоду для {city}. Попробуй позже."
     except Exception as e:
-        return f"Ошибка: {e}. Попробуй другой город."
+        return f"Ошибка: {e}"
 
 # ============================================================
 # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СТИЛИЗАЦИИ ОТВЕТОВ =====
 # ============================================================
 def style_response(text: str, action: str = "info") -> str:
-    """Оборачивает ответ в стиль Дилана"""
+    """Оборачивает ответ в стиль Дилана без звёздочек"""
     styles = {
-        "info": f"{text}",
+        "info": text,
         "reminder": f"Ну опять... Ладно, запомнил. {text}",
         "list": f"Давай посмотрю... {text}",
         "delete": f"Удалил. Не благодари. {text}",
@@ -261,8 +256,7 @@ async def cmd_start(message: types.Message):
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- погода в Москве\n"
-        "- погода в любом городе"
+        "- погода в Москве"
     )
 
 @dp.message_handler(commands=['reminders'])
@@ -280,8 +274,7 @@ async def cmd_reminders(message: types.Message):
         text += f"ID:{r_id} | {r_text} | {r_time} | {r_type}\n"
     text += "\nЧтобы удалить: /del_remind ID"
     
-    styled = style_response(text, "list")
-    await message.answer(styled)
+    await message.answer(style_response(text, "list"))
 
 @dp.message_handler(commands=['clear'])
 async def cmd_clear(message: types.Message):
@@ -328,7 +321,7 @@ async def cmd_del_remind(message: types.Message):
     try:
         rem_id = int(parts[1])
         delete_reminder(rem_id)
-        await message.answer(f"Удалил. Не благодари. Напоминание #{rem_id} удалено.")
+        await message.answer(style_response(f"Напоминание #{rem_id} удалено.", "delete"))
     except:
         await message.answer("Ошибка. Напиши: /del_remind ID")
 
@@ -358,8 +351,7 @@ async def handle_text(message: types.Message):
             city = "Москва"
         
         weather = get_weather(city)
-        styled = style_response(weather, "weather")
-        await message.answer(styled)
+        await message.answer(style_response(weather, "weather"))
         return
 
     # === НАПОМИНАНИЯ ===
@@ -368,8 +360,7 @@ async def handle_text(message: types.Message):
         if task and remind_time:
             add_reminder(user_id, task, remind_time, repeat_type)
             msg = f"Напомню в {remind_time} (по времени Читы)"
-            styled = style_response(msg, "reminder")
-            await message.answer(styled)
+            await message.answer(style_response(msg, "reminder"))
             return
         else:
             await message.answer(
