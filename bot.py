@@ -24,7 +24,7 @@ from db import (
 # ============================================================
 # ===== ЧАСОВОЙ ПОЯС (ЧИТА UTC+9) =====
 # ============================================================
-TIMEZONE = pytz.timezone('Asia/Yakutsk')  # Чита, Якутск, UTC+9
+TIMEZONE = pytz.timezone('Asia/Yakutsk')
 
 def get_now():
     return datetime.now(TIMEZONE)
@@ -125,27 +125,61 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА =====
+# ===== ПОГОДА (с поддержкой Читы и любых городов) =====
 # ============================================================
 def get_weather(city: str):
     try:
         import urllib.parse
         city_encoded = urllib.parse.quote(city)
+        
+        # Пробуем через wttr.in
         url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w+%h&lang=ru"
         response = requests.get(url, timeout=10)
+        
         if response.status_code == 200:
             data = response.text.strip()
-            parts = data.split()
-            if len(parts) >= 4:
-                condition = " ".join(parts[:-3])
-                temp = parts[-3]
-                wind = parts[-2]
-                humidity = parts[-1]
-                return f"🌤️ Погода в {city}:\n{condition}\nТемпература: {temp}\nВетер: {wind}\nВлажность: {humidity}"
-            return f"🌤️ Погода в {city}: {data}"
-        return "❌ Не могу получить погоду. Проверь название города."
+            if data and "Unknown" not in data:
+                parts = data.split()
+                if len(parts) >= 4:
+                    condition = " ".join(parts[:-3])
+                    temp = parts[-3]
+                    wind = parts[-2]
+                    humidity = parts[-1]
+                    return f"Погода в {city}: {condition}, {temp}, ветер {wind}, влажность {humidity}"
+                return f"Погода в {city}: {data}"
+        
+        # Если wttr.in не сработал, пробуем альтернативный API (без ключа)
+        alt_url = f"http://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid=bd5e378503939ddaee76f12ad7a97608&units=metric&lang=ru"
+        alt_response = requests.get(alt_url, timeout=10)
+        if alt_response.status_code == 200:
+            alt_data = alt_response.json()
+            if alt_data.get('main'):
+                temp = alt_data['main']['temp']
+                feels_like = alt_data['main']['feels_like']
+                humidity = alt_data['main']['humidity']
+                wind = alt_data['wind']['speed']
+                weather_desc = alt_data['weather'][0]['description']
+                return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
+        
+        return f"Не могу найти погоду для {city}. Проверь название."
     except Exception as e:
-        return f"❌ Ошибка: {e}"
+        return f"Ошибка: {e}. Попробуй другой город."
+
+# ============================================================
+# ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СТИЛИЗАЦИИ ОТВЕТОВ =====
+# ============================================================
+def style_response(text: str, action: str = "info") -> str:
+    """Оборачивает ответ в стиль Дилана"""
+    styles = {
+        "info": f"{text}",
+        "reminder": f"Ну опять... Ладно, запомнил. {text}",
+        "list": f"Давай посмотрю... {text}",
+        "delete": f"Удалил. Не благодари. {text}",
+        "weather": f"Погода? Серьёзно? Ну ладно... {text}",
+        "error": f"Боже, опять ты... {text}",
+        "clear": f"Стёр. Забудь. {text}",
+    }
+    return styles.get(action, text)
 
 # ============================================================
 # ===== ПАРСИНГ НАПОМИНАНИЙ =====
@@ -215,7 +249,7 @@ async def cmd_start(message: types.Message):
     user_history[user_id] = []
     
     await message.answer(
-        "Ну привет... Я Дилан. Если надо — спрашивай.\n\n"
+        "Ну привет... Я Дилан. Если надо — спрашивай. Только не отвлекай просто так.\n\n"
         "Команды:\n"
         "/clear — очистить историю\n"
         "/help — что я умею\n"
@@ -227,7 +261,8 @@ async def cmd_start(message: types.Message):
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- погода в Москве"
+        "- погода в Москве\n"
+        "- погода в любом городе"
     )
 
 @dp.message_handler(commands=['reminders'])
@@ -237,14 +272,16 @@ async def cmd_reminders(message: types.Message):
 
     reminders = get_all_reminders(message.from_user.id)
     if not reminders:
-        await message.answer("У тебя нет напоминаний.")
+        await message.answer("У тебя нет напоминаний. И слава богу, меньше работы.")
         return
 
     text = "Твои напоминания:\n"
     for r_id, r_text, r_time, r_type in reminders:
         text += f"ID:{r_id} | {r_text} | {r_time} | {r_type}\n"
     text += "\nЧтобы удалить: /del_remind ID"
-    await message.answer(text)
+    
+    styled = style_response(text, "list")
+    await message.answer(styled)
 
 @dp.message_handler(commands=['clear'])
 async def cmd_clear(message: types.Message):
@@ -291,7 +328,7 @@ async def cmd_del_remind(message: types.Message):
     try:
         rem_id = int(parts[1])
         delete_reminder(rem_id)
-        await message.answer(f"Напоминание #{rem_id} удалено.")
+        await message.answer(f"Удалил. Не благодари. Напоминание #{rem_id} удалено.")
     except:
         await message.answer("Ошибка. Напиши: /del_remind ID")
 
@@ -321,7 +358,8 @@ async def handle_text(message: types.Message):
             city = "Москва"
         
         weather = get_weather(city)
-        await message.answer(weather)
+        styled = style_response(weather, "weather")
+        await message.answer(styled)
         return
 
     # === НАПОМИНАНИЯ ===
@@ -329,9 +367,9 @@ async def handle_text(message: types.Message):
         task, remind_time, repeat_type = parse_reminder(text.lower())
         if task and remind_time:
             add_reminder(user_id, task, remind_time, repeat_type)
-            await message.answer(
-                f"Запомнил! Напомню в {remind_time} (по времени Читы)"
-            )
+            msg = f"Напомню в {remind_time} (по времени Читы)"
+            styled = style_response(msg, "reminder")
+            await message.answer(styled)
             return
         else:
             await message.answer(
