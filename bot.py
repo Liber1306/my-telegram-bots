@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message
 
 from gigachat import GigaChat
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,7 +27,6 @@ from db import (
 TIMEZONE = pytz.timezone('Asia/Yakutsk')  # Чита, Якутск, UTC+9
 
 def get_now():
-    """Возвращает текущее время в часовом поясе Читы"""
     return datetime.now(TIMEZONE)
 
 # ============================================================
@@ -51,7 +50,6 @@ print("Все библиотеки загружены, токены найден
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(bot)
 
-# ===== ПОДКЛЮЧАЕМ GIGACHAT =====
 ai_client = GigaChat(
     credentials=GIGACHAT_CREDENTIALS,
     verify_ssl_certs=False,
@@ -127,10 +125,9 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА (с поддержкой Читы) =====
+# ===== ПОГОДА =====
 # ============================================================
 def get_weather(city: str):
-    """Получает погоду через wttr.in"""
     try:
         import urllib.parse
         city_encoded = urllib.parse.quote(city)
@@ -151,57 +148,12 @@ def get_weather(city: str):
         return f"❌ Ошибка: {e}"
 
 # ============================================================
-# ===== МЕМЫ =====
-# ============================================================
-def get_random_meme():
-    try:
-        url = "https://meme-api.com/gimme"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('url'), data.get('title', 'Мем')
-        return None, None
-    except Exception as e:
-        print(f"Ошибка мема: {e}")
-        return None, None
-
-def get_meme_by_query(query: str):
-    try:
-        url = f"https://meme-api.com/gimme/{query}"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('url'), data.get('title', f'Мем про {query}')
-        return None, None
-    except Exception as e:
-        print(f"Ошибка поиска мема: {e}")
-        return None, None
-
-# ============================================================
-# ===== КНОПКИ =====
-# ============================================================
-def get_main_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        InlineKeyboardButton("📋 Мои напоминания", callback_data="show_reminders"),
-        InlineKeyboardButton("➕ Новое напоминание", callback_data="new_reminder"),
-        InlineKeyboardButton("❌ Удалить напоминание", callback_data="del_reminder"),
-        InlineKeyboardButton("🌤️ Погода", callback_data="weather"),
-        InlineKeyboardButton("🖼️ Мем", callback_data="meme"),
-        InlineKeyboardButton("🗑️ Очистить историю", callback_data="clear_history"),
-        InlineKeyboardButton("❓ Помощь", callback_data="help"),
-    ]
-    keyboard.add(*buttons)
-    return keyboard
-
-# ============================================================
-# ===== ПАРСИНГ НАПОМИНАНИЙ (с часовым поясом Читы) =====
+# ===== ПАРСИНГ НАПОМИНАНИЙ =====
 # ============================================================
 def parse_reminder(text: str):
     text_lower = text.lower()
     now = get_now()
 
-    # === ЕЖЕДНЕВНОЕ ===
     match_daily = re.search(r'напоминай каждый день в (\d{1,2}:\d{2}) (.+)', text_lower)
     if match_daily:
         time_str, task = match_daily.groups()
@@ -210,7 +162,6 @@ def parse_reminder(text: str):
             remind_time += timedelta(days=1)
         return task, remind_time.strftime("%Y-%m-%d %H:%M"), "daily"
 
-    # === ЕЖЕНЕДЕЛЬНОЕ ===
     days_map = {
         'понедельник': 0, 'вторник': 1, 'среду': 2, 'среды': 2,
         'четверг': 3, 'пятницу': 4, 'пятницы': 4, 'субботу': 5,
@@ -228,7 +179,6 @@ def parse_reminder(text: str):
                 remind_time += timedelta(days=days_ahead)
                 return task, remind_time.strftime("%Y-%m-%d %H:%M"), "weekly"
 
-    # === ОБЫЧНОЕ ===
     match_once = re.search(r'напомни через (\d+)\s*(минут|час|часов|секунд|сек) (.+)', text_lower)
     if match_once:
         number, unit, task = match_once.groups()
@@ -254,7 +204,7 @@ async def check_reminders():
         mark_sent(rem_id)
 
 # ============================================================
-# ===== ОБРАБОТЧИК КОМАНД =====
+# ===== КОМАНДЫ =====
 # ============================================================
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
@@ -265,91 +215,85 @@ async def cmd_start(message: types.Message):
     user_history[user_id] = []
     
     await message.answer(
-        "Ну привет... Я Дилан. Если надо — спрашивай.\n"
-        "Нажимай кнопки, не отвлекай просто так.",
-        reply_markup=get_main_keyboard()
+        "Ну привет... Я Дилан. Если надо — спрашивай.\n\n"
+        "Команды:\n"
+        "/clear — очистить историю\n"
+        "/help — что я умею\n"
+        "/reminders — список напоминаний\n"
+        "/del_remind ID — удалить напоминание\n\n"
+        "Напоминания:\n"
+        "- Напомни через 10 минут позвонить\n"
+        "- Напоминай каждый день в 09:00 делать зарядку\n"
+        "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
+        "Погода:\n"
+        "- погода в Чите\n"
+        "- погода в Москве"
     )
 
-# ============================================================
-# ===== ОБРАБОТЧИК КНОПОК =====
-# ============================================================
-@dp.callback_query_handler()
-async def handle_callback(callback: CallbackQuery):
-    if not is_allowed(callback.from_user.id):
-        await callback.answer("Доступ запрещён")
+@dp.message_handler(commands=['reminders'])
+async def cmd_reminders(message: types.Message):
+    if not is_allowed(message.from_user.id):
         return
 
-    user_id = callback.from_user.id
-    data = callback.data
+    reminders = get_all_reminders(message.from_user.id)
+    if not reminders:
+        await message.answer("У тебя нет напоминаний.")
+        return
 
-    if data == "show_reminders":
-        reminders = get_all_reminders(user_id)
-        if not reminders:
-            await callback.message.edit_text("У тебя нет напоминаний. И слава богу, меньше работы.")
-        else:
-            text = "Твои напоминания:\n"
-            for r_id, r_text, r_time, r_type in reminders:
-                text += f"ID:{r_id} | {r_text} | {r_time} | {r_type}\n"
-            text += "\nЧтобы удалить: /del_remind ID"
-            await callback.message.edit_text(text)
-        await callback.answer()
+    text = "Твои напоминания:\n"
+    for r_id, r_text, r_time, r_type in reminders:
+        text += f"ID:{r_id} | {r_text} | {r_time} | {r_type}\n"
+    text += "\nЧтобы удалить: /del_remind ID"
+    await message.answer(text)
 
-    elif data == "new_reminder":
-        await callback.message.edit_text(
-            "Напиши напоминание в одном из форматов:\n"
-            "- Напомни через 10 минут позвонить\n"
-            "- Напоминай каждый день в 09:00 делать зарядку\n"
-            "- Напоминай каждый вторник в 20:00 поливать цветы"
-        )
-        await callback.answer()
+@dp.message_handler(commands=['clear'])
+async def cmd_clear(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
 
-    elif data == "del_reminder":
-        reminders = get_all_reminders(user_id)
-        if not reminders:
-            await callback.message.edit_text("У тебя нет напоминаний для удаления.")
-        else:
-            text = "Напиши: /del_remind ID\n\nID можно посмотреть в /reminders\n\n"
-            for r_id, r_text, r_time, r_type in reminders:
-                text += f"ID:{r_id} | {r_text}\n"
-            await callback.message.edit_text(text)
-        await callback.answer()
+    user_id = message.from_user.id
+    user_history[user_id] = []
+    await message.answer("Стёр нашу переписку. Мне не жалко.")
 
-    elif data == "weather":
-        await callback.message.edit_text(
-            "Напиши город, например:\n"
-            "погода в Москве\n"
-            "погода в Чите\n"
-            "погода в Санкт-Петербурге"
-        )
-        await callback.answer()
+@dp.message_handler(commands=['help'])
+async def cmd_help(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
 
-    elif data == "meme":
-        await callback.message.edit_text(
-            "Напиши, какой мем хочешь:\n"
-            "- просто 'мем' — случайный\n"
-            "- 'мем про кота'\n"
-            "- 'мем про программиста'\n"
-            "Или любой другой запрос!"
-        )
-        await callback.answer()
+    await message.answer(
+        "Что я умею:\n"
+        "- отвечать на вопросы (в своём стиле)\n"
+        "- напоминать\n"
+        "- показывать погоду\n"
+        "- ворчать, но помогать\n\n"
+        "Напоминания:\n"
+        "- Напомни через 10 минут позвонить\n"
+        "- Напоминай каждый день в 09:00 делать зарядку\n"
+        "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
+        "Погода:\n"
+        "- погода в Чите\n"
+        "- погода в Москве\n\n"
+        "Команды:\n"
+        "/reminders — список напоминаний\n"
+        "/del_remind ID — удалить напоминание\n"
+        "/clear — очистить историю"
+    )
 
-    elif data == "clear_history":
-        user_history[user_id] = []
-        await callback.message.edit_text("Стёр нашу переписку. Мне не жалко.")
-        await callback.answer()
+@dp.message_handler(commands=['del_remind'])
+async def cmd_del_remind(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
 
-    elif data == "help":
-        await callback.message.edit_text(
-            "Что я умею:\n"
-            "📋 Мои напоминания — список всех напоминаний\n"
-            "➕ Новое напоминание — создать новое\n"
-            "❌ Удалить напоминание — удалить по ID\n"
-            "🌤️ Погода — узнать погоду в любом городе\n"
-            "🖼️ Мем — получить случайный или по запросу\n"
-            "🗑️ Очистить историю — стереть переписку\n\n"
-            "Также я отвечаю на любые вопросы в своём стиле!"
-        )
-        await callback.answer()
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Напиши: /del_remind ID (ID можно посмотреть в /reminders)")
+        return
+    try:
+        rem_id = int(parts[1])
+        delete_reminder(rem_id)
+        await message.answer(f"Напоминание #{rem_id} удалено.")
+    except:
+        await message.answer("Ошибка. Напиши: /del_remind ID")
 
 # ============================================================
 # ===== ОБРАБОТЧИК ТЕКСТА =====
@@ -377,25 +321,7 @@ async def handle_text(message: types.Message):
             city = "Москва"
         
         weather = get_weather(city)
-        await message.answer(weather, reply_markup=get_main_keyboard())
-        return
-
-    # === МЕМЫ ===
-    if "мем" in text.lower():
-        query_match = re.search(r'мем(?: про)? (.+)', text.lower())
-        if query_match:
-            query = query_match.group(1).strip()
-            url, title = get_meme_by_query(query)
-            if url:
-                await message.answer_photo(url, caption=f"🖼️ {title}", reply_markup=get_main_keyboard())
-            else:
-                await message.answer("Не нашёл мем по этому запросу. Попробуй другое слово.", reply_markup=get_main_keyboard())
-        else:
-            url, title = get_random_meme()
-            if url:
-                await message.answer_photo(url, caption=f"🖼️ {title}", reply_markup=get_main_keyboard())
-            else:
-                await message.answer("Не могу найти мем. Попробуй позже.", reply_markup=get_main_keyboard())
+        await message.answer(weather)
         return
 
     # === НАПОМИНАНИЯ ===
@@ -404,8 +330,7 @@ async def handle_text(message: types.Message):
         if task and remind_time:
             add_reminder(user_id, task, remind_time, repeat_type)
             await message.answer(
-                f"Запомнил! Напомню в {remind_time} (по времени Читы) {'(каждый день)' if repeat_type == 'daily' else '(каждую неделю)' if repeat_type == 'weekly' else ''}",
-                reply_markup=get_main_keyboard()
+                f"Запомнил! Напомню в {remind_time} (по времени Читы)"
             )
             return
         else:
@@ -413,8 +338,7 @@ async def handle_text(message: types.Message):
                 "Я не понял. Попробуй:\n"
                 "- Напомни через 10 минут позвонить\n"
                 "- Напоминай каждый день в 09:00 делать зарядку\n"
-                "- Напоминай каждый вторник в 20:00 поливать цветы",
-                reply_markup=get_main_keyboard()
+                "- Напоминай каждый вторник в 20:00 поливать цветы"
             )
             return
 
@@ -435,10 +359,10 @@ async def handle_text(message: types.Message):
         })
         ai_reply = response.choices[0].message.content
         user_history[user_id].append({"role": "assistant", "content": ai_reply})
-        await message.answer(ai_reply, reply_markup=get_main_keyboard())
+        await message.answer(ai_reply)
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
-        await message.answer("Ошибка. Попробуй ещё раз или напиши /start", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Попробуй ещё раз или напиши /start")
 
 # ============================================================
 # ===== ОБРАБОТЧИК ФОТО =====
@@ -447,7 +371,7 @@ async def handle_text(message: types.Message):
 async def handle_photo(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
-    await message.answer("Фото я не вижу. Я текстовый бот. Опиши словами, что там.", reply_markup=get_main_keyboard())
+    await message.answer("Фото я не вижу. Я текстовый бот. Опиши словами, что там.")
 
 # ============================================================
 # ===== ЗАПУСК =====
@@ -458,9 +382,9 @@ async def main():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1)
     scheduler.start()
-    print(f"Планировщик напоминаний запущен! Часовой пояс: Чита (UTC+9)")
+    print("Планировщик напоминаний запущен! Часовой пояс: Чита (UTC+9)")
     
-    print("Дилан (с кнопками, погодой, мемами и часовым поясом Читы) запускается...")
+    print("Дилан (с погодой и напоминалками) запускается...")
     bot_info = await bot.get_me()
     print(f"Бот @{bot_info.username} готов!")
     
