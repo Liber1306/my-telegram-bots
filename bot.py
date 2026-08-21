@@ -4,12 +4,14 @@ import re
 import requests
 import pytz
 import json
+import base64
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
+from io import BytesIO
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
+from aiogram.types import Message, ContentType
 
 from gigachat import GigaChat
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -53,6 +55,7 @@ print("Все библиотеки загружены, токены найден
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(bot)
 
+# Инициализация GigaChat (для версии 0.2.3)
 ai_client = GigaChat(
     credentials=GIGACHAT_CREDENTIALS,
     verify_ssl_certs=False,
@@ -265,7 +268,57 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА (УЛУЧШЕННЫЙ ПАРСИНГ) =====
+# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (ИСПРАВЛЕНА) =====
+# ============================================================
+async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -> str:
+    """
+    Отправляет фото в GigaChat и получает описание (для версии 0.2.3)
+    """
+    try:
+        # 1. Скачиваем фото от пользователя
+        file = await bot.get_file(photo_file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        
+        # 2. Конвертируем в base64
+        image_base64 = base64.b64encode(file_bytes.getvalue()).decode('utf-8')
+        
+        # 3. Формируем запрос для GigaChat (синтаксис для версии 0.2.3)
+        messages = [
+            {
+                "role": "system",
+                "content": CHARACTER_PROMPT
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        # 4. Отправляем запрос в GigaChat
+        response = ai_client.chat({
+            "model": "GigaChat-2-Pro",
+            "messages": messages
+        })
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        print(f"Ошибка обработки фото через GigaChat: {e}")
+        return f"Серьёзно? Не могу разобрать это фото. {str(e)}"
+
+# ============================================================
+# ===== ПОГОДА =====
 # ============================================================
 def extract_city_from_query(text: str) -> str:
     """Извлекает название города из запроса о погоде"""
@@ -275,7 +328,6 @@ def extract_city_from_query(text: str) -> str:
     match = re.search(r'погода\s+в\s+([а-яё\s-]+)', text_lower)
     if match:
         city = match.group(1).strip()
-        # Убираем возможные окончания
         city = re.sub(r'\s*(сегодня|завтра|сейчас|на\s+сегодня|на\s+завтра)$', '', city)
         return city
     
@@ -290,7 +342,6 @@ def extract_city_from_query(text: str) -> str:
     match = re.search(r'погода\s+([а-яё\s-]+)', text_lower)
     if match:
         city = match.group(1).strip()
-        # Проверяем, не является ли это служебным словом
         if city not in ['сегодня', 'завтра', 'сейчас', 'на', 'в']:
             return city
     
@@ -316,7 +367,6 @@ def get_weather(city: str):
                     weather_desc = data['weather'][0]['description']
                     return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
             elif response.status_code == 404:
-                # Если город не найден, пробуем через веб
                 weather_data = search_web_for_weather(city)
                 if weather_data:
                     return weather_data
@@ -429,10 +479,9 @@ async def cmd_start(message: types.Message):
         "- погода в Чите\n"
         "- какая погода в Чите\n"
         "- в Чите погода\n\n"
-        "Вопросы (поиск в интернете):\n"
-        "- что такое квантовый компьютер\n"
-        "- кто такой Эйнштейн\n"
-        "- сколько населения в Японии"
+        "Фото:\n"
+        "- Просто отправь фото и напиши вопрос или комментарий\n"
+        "- Например: выбери какое фото лучше"
     )
 
 @dp.message_handler(commands=['reminders'])
@@ -471,6 +520,7 @@ async def cmd_help(message: types.Message):
         "- отвечать на вопросы (в своём стиле)\n"
         "- напоминать\n"
         "- показывать погоду\n"
+        "- анализировать фото (отправь картинку с вопросом)\n"
         "- ворчать, но помогать\n\n"
         "Напоминания:\n"
         "- Напомни через 10 минут позвонить\n"
@@ -480,10 +530,9 @@ async def cmd_help(message: types.Message):
         "- погода в Чите\n"
         "- какая погода в Чите\n"
         "- в Чите погода\n\n"
-        "Вопросы (поиск в интернете):\n"
-        "- что такое квантовый компьютер\n"
-        "- кто такой Эйнштейн\n"
-        "- сколько населения в Японии\n\n"
+        "Фото:\n"
+        "- Отправь фото и напиши комментарий/вопрос\n"
+        "- Например: выбери какое фото лучше\n\n"
         "Команды:\n"
         "/reminders — список напоминаний\n"
         "/del_remind ID — удалить напоминание\n"
@@ -507,6 +556,28 @@ async def cmd_del_remind(message: types.Message):
         await message.answer("Ошибка. Напиши: /del_remind ID")
 
 # ============================================================
+# ===== ОБРАБОТЧИК ФОТО (ИСПРАВЛЕН) =====
+# ============================================================
+@dp.message_handler(content_types=['photo'])
+async def handle_photo(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
+
+    # Получаем подпись к фото (если есть)
+    caption = message.caption or ""
+    
+    # Отправляем сообщение, что бот думает
+    await message.answer("Секунду, смотрю...")
+    
+    # Получаем ID самого качественного фото (последнее в списке)
+    photo = message.photo[-1]
+    
+    # Обрабатываем фото через GigaChat
+    response = await process_photo_with_gigachat(photo.file_id, caption)
+    
+    await message.answer(response)
+
+# ============================================================
 # ===== ОБРАБОТЧИК ТЕКСТА =====
 # ============================================================
 @dp.message_handler(content_types=['text'])
@@ -523,17 +594,14 @@ async def handle_text(message: types.Message):
     if text.startswith('/'):
         return
 
-    # === ПОГОДА (УЛУЧШЕННАЯ) ===
+    # === ПОГОДА ===
     if "погода" in text.lower():
-        # Извлекаем город
         city = extract_city_from_query(text)
         
         if not city:
-            # Если город не найден, пробуем найти любое слово после "в"
             match = re.search(r'\bв\s+([а-яё\s-]+?)(?:\s|$)', text.lower())
             if match:
                 city = match.group(1).strip()
-                # Проверяем, что это не служебное слово
                 if city in ['сегодня', 'завтра', 'сейчас', 'этом']:
                     city = "Москва"
             else:
@@ -560,19 +628,14 @@ async def handle_text(message: types.Message):
             )
             return
 
-    # === ВЕБ-ПОИСК (только для информационных вопросов) ===
+    # === ВЕБ-ПОИСК ===
     if is_web_search_needed(text):
-        # Ищем информацию (без лишних сообщений)
         search_results = search_web(text)
         
         if search_results:
-            # Обрабатываем через ИИ
             final_response = process_with_web_search(text, search_results)
             await message.answer(final_response)
             return
-        else:
-            # Если ничего не нашли, отправляем в обычный диалог
-            pass  # Продолжаем к обычному диалогу
 
     # === ОБЫЧНЫЙ ДИАЛОГ С ИИ ===
     if user_id not in user_history:
@@ -597,15 +660,6 @@ async def handle_text(message: types.Message):
         await message.answer("Ошибка. Попробуй ещё раз или напиши /start")
 
 # ============================================================
-# ===== ОБРАБОТЧИК ФОТО =====
-# ============================================================
-@dp.message_handler(content_types=['photo'])
-async def handle_photo(message: types.Message):
-    if not is_allowed(message.from_user.id):
-        return
-    await message.answer("Фото я не вижу. Я текстовый бот. Опиши словами, что там.")
-
-# ============================================================
 # ===== ЗАПУСК =====
 # ============================================================
 async def main():
@@ -616,7 +670,7 @@ async def main():
     scheduler.start()
     print("Планировщик напоминаний запущен! Часовой пояс: Чита (UTC+9)")
     
-    print("Дилан (с веб-поиском и напоминалками) запускается...")
+    print("Дилан (с поддержкой фото через GigaChat) запускается...")
     bot_info = await bot.get_me()
     print(f"Бот @{bot_info.username} готов!")
     
