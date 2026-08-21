@@ -270,11 +270,11 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (С СЖАТИЕМ) =====
+# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (ИСПРАВЛЕНА) =====
 # ============================================================
 async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -> str:
     """
-    Отправляет фото в GigaChat и получает описание (с сжатием)
+    Отправляет фото в GigaChat и получает описание (ПРАВИЛЬНЫЙ синтаксис для версии 0.2.3)
     """
     try:
         # 1. Скачиваем фото от пользователя
@@ -291,7 +291,6 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
         
         # Сохраняем с высоким сжатием (качество 60%)
         output = BytesIO()
-        # Определяем формат
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         image.save(output, format='JPEG', quality=60, optimize=True)
@@ -300,10 +299,9 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
         # 3. Конвертируем в base64 (уже сжатое)
         image_base64 = base64.b64encode(output.getvalue()).decode('utf-8')
         
-        # Логируем размер для отладки
         print(f"Размер base64: {len(image_base64)} символов")
         
-        # 4. Формируем запрос для GigaChat
+        # 4. Формируем ПРАВИЛЬНЫЙ запрос для GigaChat
         messages = [
             {
                 "role": "system",
@@ -311,7 +309,18 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
             },
             {
                 "role": "user",
-                "content": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках.\n\nИзображение: data:image/jpeg;base64,{image_base64}"
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
             }
         ]
         
@@ -685,7 +694,6 @@ async def main():
     print(f"Бот @{bot_info.username} готов!")
     
     try:
-        # 👇 ИСПРАВЛЕНО: передаем бота в start_polling
         await dp.start_polling(bot)
     finally:
         scheduler.shutdown()
