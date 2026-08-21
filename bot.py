@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 from io import BytesIO
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message, ContentType
+from aiogram.types import Message
 
 from gigachat import GigaChat
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -268,7 +268,7 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (ИСПРАВЛЕНА) =====
+# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (ИСПРАВЛЕНА ДЛЯ ВЕРСИИ 0.2.3) =====
 # ============================================================
 async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -> str:
     """
@@ -282,7 +282,9 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
         # 2. Конвертируем в base64
         image_base64 = base64.b64encode(file_bytes.getvalue()).decode('utf-8')
         
-        # 3. Формируем запрос для GigaChat (синтаксис для версии 0.2.3)
+        # 3. Формируем запрос для GigaChat
+        # ВАЖНО: В версии 0.2.3 изображение передается как строка с data:image/jpeg;base64,
+        # а не как отдельный объект image_url
         messages = [
             {
                 "role": "system",
@@ -290,18 +292,7 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
             },
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_base64}"
-                        }
-                    }
-                ]
+                "content": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках.\n\nИзображение: data:image/jpeg;base64,{image_base64}"
             }
         ]
         
@@ -315,7 +306,7 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
         
     except Exception as e:
         print(f"Ошибка обработки фото через GigaChat: {e}")
-        return f"Серьёзно? Не могу разобрать это фото. {str(e)}"
+        return f"Серьёзно? Не могу разобрать это фото. Ошибка: {str(e)}"
 
 # ============================================================
 # ===== ПОГОДА =====
@@ -556,7 +547,7 @@ async def cmd_del_remind(message: types.Message):
         await message.answer("Ошибка. Напиши: /del_remind ID")
 
 # ============================================================
-# ===== ОБРАБОТЧИК ФОТО (ИСПРАВЛЕН) =====
+# ===== ОБРАБОТЧИК ФОТО =====
 # ============================================================
 @dp.message_handler(content_types=['photo'])
 async def handle_photo(message: types.Message):
