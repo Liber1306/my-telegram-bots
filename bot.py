@@ -3,8 +3,10 @@ import os
 import re
 import requests
 import pytz
+import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from urllib.parse import quote_plus
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
@@ -36,7 +38,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
-WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")  # Добавь в .env
+WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
 if not TELEGRAM_TOKEN:
     raise ValueError("Ошибка: TELEGRAM_TOKEN не найден в файле .env!")
@@ -106,6 +108,126 @@ CHARACTER_PROMPT = (
 )
 
 # ============================================================
+# ===== ВЕБ-ПОИСК (БЕСПЛАТНЫЙ) =====
+# ============================================================
+def search_web(query: str) -> str:
+    """
+    Выполняет поиск через DuckDuckGo (без API ключа)
+    Возвращает краткую выдержку из результатов
+    """
+    try:
+        # Используем DuckDuckGo Instant Answer API (бесплатно)
+        url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
+        
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Собираем информацию из разных источников
+            results = []
+            
+            # Abstract (краткое описание)
+            if data.get('Abstract'):
+                results.append(data['Abstract'])
+            
+            # Answer (прямой ответ)
+            if data.get('Answer'):
+                results.append(data['Answer'])
+            
+            # Definition (определение)
+            if data.get('Definition'):
+                results.append(data['Definition'])
+            
+            # Related topics (связанные темы)
+            if data.get('RelatedTopics'):
+                for topic in data['RelatedTopics'][:3]:
+                    if topic.get('Text'):
+                        results.append(topic['Text'])
+            
+            if results:
+                return ' '.join(results[:3])[:1000]  # Ограничиваем длину
+            
+            # Если ничего не нашли, пробуем поискать через Wikipedia
+            wiki_result = search_wikipedia(query)
+            if wiki_result:
+                return wiki_result
+                
+            return "Не нашёл информации. Попробуй переформулировать вопрос."
+        else:
+            return f"Ошибка поиска: {response.status_code}"
+            
+    except Exception as e:
+        print(f"Ошибка веб-поиска: {e}")
+        return f"Ошибка: {e}"
+
+def search_wikipedia(query: str) -> str:
+    """Поиск в Wikipedia через API"""
+    try:
+        url = f"https://ru.wikipedia.org/api/rest_v1/page/summary/{quote_plus(query)}"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('extract'):
+                return data['extract'][:500]
+        return None
+    except:
+        return None
+
+def search_web_for_weather(city: str) -> str:
+    """Специальный поиск погоды через веб"""
+    try:
+        # Пробуем wttr.in (бесплатно)
+        city_encoded = quote_plus(city)
+        wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
+        response = requests.get(wttr_url, timeout=10)
+        if response.status_code == 200:
+            data = response.text.strip()
+            if data and "Unknown" not in data:
+                return f"Погода в {city}: {data}"
+        
+        # Если wttr.in не сработал, пробуем DuckDuckGo
+        ddg_url = f"https://api.duckduckgo.com/?q=погода+{quote_plus(city)}&format=json&no_html=1"
+        response = requests.get(ddg_url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('Abstract'):
+                return f"Погода в {city}: {data['Abstract']}"
+        
+        return f"Не могу найти погоду для {city}. Проверь название."
+    except Exception as e:
+        return f"Ошибка: {e}"
+
+def is_web_search_needed(query: str) -> bool:
+    """Определяем, нужен ли веб-поиск"""
+    # Список ключевых слов для веб-поиска
+    web_keywords = [
+        'что такое', 'кто такой', 'где находится', 'когда', 'сколько',
+        'новости', 'сегодня', 'завтра', 'вчера', 'курс', 'цена',
+        'сколько стоит', 'как сделать', 'как работает', 'почему',
+        'что значит', 'перевод', 'синоним', 'определение',
+        'история', 'факт', 'информация', 'данные'
+    ]
+    
+    query_lower = query.lower()
+    
+    # Проверяем, есть ли ключевые слова
+    for keyword in web_keywords:
+        if keyword in query_lower:
+            return True
+    
+    # Проверяем, есть ли вопросительное слово в начале
+    question_words = ['что', 'кто', 'где', 'когда', 'почему', 'зачем', 'как', 'сколько']
+    for word in question_words:
+        if query_lower.startswith(word) or f" {word} " in query_lower:
+            return True
+    
+    return False
+
+# ============================================================
 # ===== БЕЛЫЙ СПИСОК =====
 # ============================================================
 ALLOWED_USERS = [2084482777, 7798113843]
@@ -119,44 +241,62 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА (OpenWeatherMap) =====
+# ===== ПОГОДА (сначала OpenWeather, потом веб) =====
 # ============================================================
 def get_weather(city: str):
-    """Получает погоду через OpenWeatherMap"""
+    """Получает погоду: сначала через API, потом через веб"""
     try:
-        import urllib.parse
-        city_encoded = urllib.parse.quote(city)
+        city_encoded = quote_plus(city)
         
-        # Если нет ключа, используем wttr.in как запасной вариант
-        if not WEATHER_API_KEY:
-            wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
-            response = requests.get(wttr_url, timeout=10)
+        # Если есть API ключ, используем OpenWeatherMap
+        if WEATHER_API_KEY:
+            url = f"https://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
+            response = requests.get(url, timeout=10)
+            
             if response.status_code == 200:
-                data = response.text.strip()
-                if data and "Unknown" not in data:
-                    return f"Погода в {city}: {data}"
-            return f"Не могу найти погоду для {city}. Проверь название или добавь OPENWEATHER_API_KEY в .env"
+                data = response.json()
+                if data.get('main'):
+                    temp = data['main']['temp']
+                    feels_like = data['main']['feels_like']
+                    humidity = data['main']['humidity']
+                    wind = data['wind']['speed']
+                    weather_desc = data['weather'][0]['description']
+                    return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
+            elif response.status_code == 404:
+                # Если город не найден, пробуем через веб
+                return search_web_for_weather(city)
         
-        # Основной запрос к OpenWeatherMap
-        url = f"https://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
-        response = requests.get(url, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('main'):
-                temp = data['main']['temp']
-                feels_like = data['main']['feels_like']
-                humidity = data['main']['humidity']
-                wind = data['wind']['speed']
-                weather_desc = data['weather'][0]['description']
-                return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
-        elif response.status_code == 404:
-            return f"Город {city} не найден. Проверь название."
-        else:
-            return f"Ошибка API: {response.status_code}. Попробуй позже."
+        # Если нет ключа или API не сработал, используем веб-поиск
+        return search_web_for_weather(city)
             
     except Exception as e:
         return f"Ошибка: {e}"
+
+# ============================================================
+# ===== ОБРАБОТЧИК ДЛЯ ВЕБ-ПОИСКА С ИИ =====
+# ============================================================
+def process_with_web_search(query: str, search_result: str) -> str:
+    """Обрабатывает запрос с результатами поиска через GigaChat"""
+    try:
+        prompt = (
+            f"Ты — Дилан (ворчливый, но добрый программист). "
+            f"Пользователь спросил: '{query}'. "
+            f"Вот что я нашёл в интернете: '{search_result}'. "
+            f"Ответь пользователю в своём стиле (с ворчанием, но полезно), "
+            f"используя эту информацию. Не пиши действия в звёздочках. "
+            f"Обращайся к пользователю на 'ты' в женском роде. "
+            f"Ответ должен быть кратким и по делу."
+        )
+        
+        response = ai_client.chat({
+            "model": "GigaChat-2-Pro",
+            "messages": [{"role": "system", "content": CHARACTER_PROMPT}, 
+                        {"role": "user", "content": prompt}]
+        })
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Ошибка обработки поиска: {e}")
+        return f"Ну... я нашёл это: {search_result[:500]}... Остальное сам гугли."
 
 # ============================================================
 # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СТИЛИЗАЦИИ ОТВЕТОВ =====
@@ -171,6 +311,7 @@ def style_response(text: str, action: str = "info") -> str:
         "weather": f"Погода? Серьёзно? Ну ладно... {text}",
         "error": f"Боже, опять ты... {text}",
         "clear": f"Стёр. Забудь. {text}",
+        "search": f"Сейчас гляну... {text}",
     }
     return styles.get(action, text)
 
@@ -254,7 +395,11 @@ async def cmd_start(message: types.Message):
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- погода в Москве"
+        "- погода в Москве\n\n"
+        "Вопросы (поиск в интернете):\n"
+        "- что такое квантовый компьютер\n"
+        "- кто такой Эйнштейн\n"
+        "- сколько населения в Японии"
     )
 
 @dp.message_handler(commands=['reminders'])
@@ -301,6 +446,10 @@ async def cmd_help(message: types.Message):
         "Погода:\n"
         "- погода в Чите\n"
         "- погода в Москве\n\n"
+        "Вопросы (поиск в интернете):\n"
+        "- что такое квантовый компьютер\n"
+        "- кто такой Эйнштейн\n"
+        "- сколько населения в Японии\n\n"
         "Команды:\n"
         "/reminders — список напоминаний\n"
         "/del_remind ID — удалить напоминание\n"
@@ -369,7 +518,26 @@ async def handle_text(message: types.Message):
             )
             return
 
-    # === ДИАЛОГ ===
+    # === ВЕБ-ПОИСК (НОВЫЙ ФУНКЦИОНАЛ) ===
+    if is_web_search_needed(text):
+        # Отправляем сообщение "печатает"
+        await message.answer("Секунду, гуглю...")
+        
+        # Ищем информацию
+        search_results = search_web(text)
+        
+        # Если нашли что-то полезное
+        if search_results and "Не нашёл" not in search_results and "Ошибка" not in search_results:
+            # Обрабатываем через ИИ
+            final_response = process_with_web_search(text, search_results)
+            await message.answer(style_response(final_response, "search"))
+            return
+        else:
+            # Если ничего не нашли, просто отвечаем как обычно
+            await message.answer(style_response("Ничего не нашёл по твоему запросу. Попробуй переформулировать.", "error"))
+            return
+
+    # === ОБЫЧНЫЙ ДИАЛОГ С ИИ (без поиска) ===
     if user_id not in user_history:
         user_history[user_id] = []
 
@@ -411,7 +579,7 @@ async def main():
     scheduler.start()
     print("Планировщик напоминаний запущен! Часовой пояс: Чита (UTC+9)")
     
-    print("Дилан (с погодой и напоминалками) запускается...")
+    print("Дилан (с веб-поиском и напоминалками) запускается...")
     bot_info = await bot.get_me()
     print(f"Бот @{bot_info.username} готов!")
     
