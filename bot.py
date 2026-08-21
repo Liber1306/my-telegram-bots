@@ -8,7 +8,6 @@ import random
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
-from bs4 import BeautifulSoup
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
@@ -111,81 +110,61 @@ CHARACTER_PROMPT = (
 )
 
 # ============================================================
-# ===== КОЛЛЕКЦИЯ МЕМОВ (ЗАПАСНОЙ ВАРИАНТ) =====
+# ===== ПОИСК РЕАЛЬНЫХ МЕМОВ В ИНТЕРНЕТЕ =====
 # ============================================================
-# Прямые ссылки на рабочее мемы
-FALLBACK_MEMES = [
-    "https://i.pinimg.com/736x/1a/8d/8f/1a8d8f8e4e8e8e8e8e8e8e8e8e8e8e8e.jpg",
-    "https://i.pinimg.com/736x/2b/5c/6a/2b5c6a7a7a7a7a7a7a7a7a7a7a7a7a7a.jpg",
-    "https://i.pinimg.com/736x/3c/7d/9b/3c7d9b9b9b9b9b9b9b9b9b9b9b9b9b9b.jpg",
-    "https://i.pinimg.com/736x/4d/8e/ac/4d8eaccccccccccccccccccccccccccc.jpg",
-    "https://i.pinimg.com/736x/5e/9f/bd/5e9fbdxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.jpg",
-]
-
-# Коллекция мемов по темам (для локального хранения)
-LOCAL_MEMES = {
-    "коты": [
-        "https://i.pinimg.com/736x/1a/8d/8f/1a8d8f8e4e8e8e8e8e8e8e8e8e8e8e8e.jpg",
-        "https://i.pinimg.com/736x/2b/5c/6a/2b5c6a7a7a7a7a7a7a7a7a7a7a7a7a7a.jpg",
-    ],
-    "программисты": [
-        "https://i.pinimg.com/736x/3c/7d/9b/3c7d9b9b9b9b9b9b9b9b9b9b9b9b9b9b.jpg",
-    ],
-    "школа": [
-        "https://i.pinimg.com/736x/4d/8e/ac/4d8eaccccccccccccccccccccccccccc.jpg",
-    ],
-    "лололошка": [
-        "https://i.pinimg.com/736x/5e/9f/bd/5e9fbdxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.jpg",
-    ]
-}
-
-# ============================================================
-# ===== ПОИСК МЕМОВ =====
-# ============================================================
-def search_meme_google(query: str) -> list:
+def search_real_meme(query: str) -> list:
     """
-    Ищет мемы через Google Images (парсинг)
+    Ищет реальные мемы в интернете через DuckDuckGo
+    Возвращает список URL картинок
     """
     try:
+        # Формируем запрос для поиска картинок
         search_query = f"{query} мем"
-        url = f"https://www.google.com/search?q={quote_plus(search_query)}&tbm=isch"
+        url = f"https://api.duckduckgo.com/?q={quote_plus(search_query)}&format=json&no_html=1"
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
         
         if response.status_code == 200:
-            # Ищем ссылки на картинки
-            img_urls = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp)[^\s]*', response.text)
-            # Фильтруем мусор
-            img_urls = [url for url in img_urls if 'google' not in url and 'gstatic' not in url]
-            return img_urls[:5]
+            data = response.json()
+            image_urls = []
+            
+            # Ищем ссылки на картинки в RelatedTopics
+            if data.get('RelatedTopics'):
+                for topic in data['RelatedTopics']:
+                    if topic.get('Text'):
+                        text = str(topic)
+                        # Ищем ссылки на изображения
+                        img_matches = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg)[^\s]*', text)
+                        if img_matches:
+                            # Фильтруем мусорные ссылки
+                            for url in img_matches:
+                                if not any(x in url for x in ['google', 'gstatic', 'youtube', 'svg']):
+                                    image_urls.append(url)
+            
+            return image_urls[:5]
         
         return []
         
     except Exception as e:
-        print(f"Ошибка поиска через Google: {e}")
+        print(f"Ошибка поиска мемов: {e}")
         return []
 
-def search_meme_by_topic(topic: str) -> str:
+def search_real_meme_by_topic(topic: str) -> str:
     """
-    Ищет мем по теме в разных источниках
+    Ищет и возвращает случайный мем по теме
     """
-    topic_lower = topic.lower()
+    if not topic or topic == "мем":
+        # Если тема не указана, пробуем найти просто мем
+        topic = "смешной мем"
     
-    # 1. Сначала проверяем локальную коллекцию
-    if topic_lower in LOCAL_MEMES:
-        return random.choice(LOCAL_MEMES[topic_lower])
+    memes = search_real_meme(topic)
     
-    # 2. Пробуем через Google
-    google_memes = search_meme_google(topic_lower)
-    if google_memes:
-        return google_memes[0]
+    if memes:
+        return random.choice(memes)
     
-    # 3. Если ничего не нашли, возвращаем случайный мем из запасных
-    return random.choice(FALLBACK_MEMES) if FALLBACK_MEMES else None
+    return None
 
 # ============================================================
 # ===== ВЕБ-ПОИСК =====
@@ -508,7 +487,7 @@ async def cmd_start(message: types.Message):
         "/help — что я умею\n"
         "/reminders — список напоминаний\n"
         "/del_remind ID — удалить напоминание\n"
-        "/meme [тема] — отправить мем (например: /meme коты)\n\n"
+        "/meme [тема] — поискать мем в интернете\n\n"
         "Напоминания:\n"
         "- Напомни через 10 минут позвонить\n"
         "- Напоминай каждый день в 09:00 делать зарядку\n"
@@ -520,34 +499,37 @@ async def cmd_start(message: types.Message):
 
 @dp.message_handler(commands=['meme'])
 async def cmd_meme(message: types.Message):
-    """Отправляет мем по запросу"""
+    """Ищет и отправляет реальный мем из интернета"""
     if not is_allowed(message.from_user.id):
         return
     
     parts = message.text.split(maxsplit=1)
-    topic = parts[1].strip() if len(parts) > 1 else "мем"
+    topic = parts[1].strip() if len(parts) > 1 else None
     
-    await message.answer(f"Секунду, ищу мем про {topic}...")
+    if not topic:
+        await message.answer("Секунду, ищу случайный мем...")
+    else:
+        await message.answer(f"Секунду, ищу мем про {topic}...")
     
-    # Ищем мем
-    meme_url = search_meme_by_topic(topic)
+    # Ищем реальный мем в интернете
+    meme_url = search_real_meme_by_topic(topic or "смешной мем")
     
     if meme_url:
         texts = [
-            f"Ну опять... Вот тебе мем про {topic}. Держи.",
-            f"Серьёзно? Мем про {topic}? Ну ладно...",
-            f"Только не говори, что тебе не смешно. Вот мем про {topic}.",
-            f"Нашёл кое-что про {topic}. Держи и отстань."
+            "Ну опять... Нашёл кое-что. Держи.",
+            "Серьёзно? Мем просить? Ну ладно... Держи.",
+            "Только не говори, что тебе не смешно. Вот мем.",
+            "Нашёл в интернете. Держи и отстань."
         ]
         await message.answer(random.choice(texts))
         
         try:
             await bot.send_photo(message.chat.id, meme_url)
         except Exception as e:
-            await message.answer(f"Не могу отправить мем. Но вот ссылка: {meme_url}")
+            await message.answer(f"Не могу отправить картинку, но вот ссылка: {meme_url}")
     else:
         await message.answer(
-            f"Не нашёл ничего про {topic}. Попробуй другую тему или просто /meme для случайного мема."
+            "Не нашёл мемов в интернете. Попробуй другую тему или просто /meme для случайного."
         )
 
 @dp.message_handler(commands=['reminders'])
