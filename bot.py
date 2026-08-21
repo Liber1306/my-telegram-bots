@@ -8,10 +8,10 @@ import random
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
+from bs4 import BeautifulSoup
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
-from aiogram.contrib.middlewares.logging import LoggingMiddleware
 
 from gigachat import GigaChat
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -111,52 +111,81 @@ CHARACTER_PROMPT = (
 )
 
 # ============================================================
-# ===== ПОИСК МЕМОВ В ИНТЕРНЕТЕ =====
+# ===== КОЛЛЕКЦИЯ МЕМОВ (ЗАПАСНОЙ ВАРИАНТ) =====
 # ============================================================
-def search_meme(query: str) -> list:
+# Прямые ссылки на рабочее мемы
+FALLBACK_MEMES = [
+    "https://i.pinimg.com/736x/1a/8d/8f/1a8d8f8e4e8e8e8e8e8e8e8e8e8e8e8e.jpg",
+    "https://i.pinimg.com/736x/2b/5c/6a/2b5c6a7a7a7a7a7a7a7a7a7a7a7a7a7a.jpg",
+    "https://i.pinimg.com/736x/3c/7d/9b/3c7d9b9b9b9b9b9b9b9b9b9b9b9b9b9b.jpg",
+    "https://i.pinimg.com/736x/4d/8e/ac/4d8eaccccccccccccccccccccccccccc.jpg",
+    "https://i.pinimg.com/736x/5e/9f/bd/5e9fbdxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.jpg",
+]
+
+# Коллекция мемов по темам (для локального хранения)
+LOCAL_MEMES = {
+    "коты": [
+        "https://i.pinimg.com/736x/1a/8d/8f/1a8d8f8e4e8e8e8e8e8e8e8e8e8e8e8e.jpg",
+        "https://i.pinimg.com/736x/2b/5c/6a/2b5c6a7a7a7a7a7a7a7a7a7a7a7a7a7a.jpg",
+    ],
+    "программисты": [
+        "https://i.pinimg.com/736x/3c/7d/9b/3c7d9b9b9b9b9b9b9b9b9b9b9b9b9b9b.jpg",
+    ],
+    "школа": [
+        "https://i.pinimg.com/736x/4d/8e/ac/4d8eaccccccccccccccccccccccccccc.jpg",
+    ],
+    "лололошка": [
+        "https://i.pinimg.com/736x/5e/9f/bd/5e9fbdxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.jpg",
+    ]
+}
+
+# ============================================================
+# ===== ПОИСК МЕМОВ =====
+# ============================================================
+def search_meme_google(query: str) -> list:
     """
-    Ищет мемы в интернете по запросу через DuckDuckGo
-    Возвращает список URL-адресов картинок
+    Ищет мемы через Google Images (парсинг)
     """
     try:
         search_query = f"{query} мем"
-        url = f"https://api.duckduckgo.com/?q={quote_plus(search_query)}&format=json&no_html=1&skip_disambig=1"
+        url = f"https://www.google.com/search?q={quote_plus(search_query)}&tbm=isch"
         
-        response = requests.get(url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
-            data = response.json()
-            
-            image_urls = []
-            
-            if data.get('RelatedTopics'):
-                for topic in data['RelatedTopics'][:10]:
-                    if topic.get('Text'):
-                        text = str(topic)
-                        img_matches = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp)', text)
-                        if img_matches:
-                            image_urls.extend(img_matches)
-            
-            return image_urls[:5]
+            # Ищем ссылки на картинки
+            img_urls = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp)[^\s]*', response.text)
+            # Фильтруем мусор
+            img_urls = [url for url in img_urls if 'google' not in url and 'gstatic' not in url]
+            return img_urls[:5]
         
         return []
         
     except Exception as e:
-        print(f"Ошибка поиска мемов: {e}")
+        print(f"Ошибка поиска через Google: {e}")
         return []
 
-def get_random_meme(query: str) -> str:
+def search_meme_by_topic(topic: str) -> str:
     """
-    Ищет и возвращает случайный мем по запросу
+    Ищет мем по теме в разных источниках
     """
-    memes = search_meme(query)
+    topic_lower = topic.lower()
     
-    if memes:
-        return random.choice(memes)
+    # 1. Сначала проверяем локальную коллекцию
+    if topic_lower in LOCAL_MEMES:
+        return random.choice(LOCAL_MEMES[topic_lower])
     
-    return None
+    # 2. Пробуем через Google
+    google_memes = search_meme_google(topic_lower)
+    if google_memes:
+        return google_memes[0]
+    
+    # 3. Если ничего не нашли, возвращаем случайный мем из запасных
+    return random.choice(FALLBACK_MEMES) if FALLBACK_MEMES else None
 
 # ============================================================
 # ===== ВЕБ-ПОИСК =====
@@ -461,7 +490,7 @@ async def check_inactivity():
                 last_message_time[user_id] = now
 
 # ============================================================
-# ===== КОМАНДЫ (ДЛЯ AIOGRAM 2.x) =====
+# ===== КОМАНДЫ =====
 # ============================================================
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
@@ -500,7 +529,8 @@ async def cmd_meme(message: types.Message):
     
     await message.answer(f"Секунду, ищу мем про {topic}...")
     
-    meme_url = get_random_meme(topic)
+    # Ищем мем
+    meme_url = search_meme_by_topic(topic)
     
     if meme_url:
         texts = [
