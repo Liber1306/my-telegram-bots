@@ -265,8 +265,37 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ПОГОДА (исправлено - определяет город) =====
+# ===== ПОГОДА (УЛУЧШЕННЫЙ ПАРСИНГ) =====
 # ============================================================
+def extract_city_from_query(text: str) -> str:
+    """Извлекает название города из запроса о погоде"""
+    text_lower = text.lower()
+    
+    # Паттерн 1: "погода в [городе]"
+    match = re.search(r'погода\s+в\s+([а-яё\s-]+)', text_lower)
+    if match:
+        city = match.group(1).strip()
+        # Убираем возможные окончания
+        city = re.sub(r'\s*(сегодня|завтра|сейчас|на\s+сегодня|на\s+завтра)$', '', city)
+        return city
+    
+    # Паттерн 2: "в [городе] погода"
+    match = re.search(r'в\s+([а-яё\s-]+)\s+погода', text_lower)
+    if match:
+        city = match.group(1).strip()
+        city = re.sub(r'\s*(сегодня|завтра|сейчас|на\s+сегодня|на\s+завтра)$', '', city)
+        return city
+    
+    # Паттерн 3: "погода [город]" (без "в")
+    match = re.search(r'погода\s+([а-яё\s-]+)', text_lower)
+    if match:
+        city = match.group(1).strip()
+        # Проверяем, не является ли это служебным словом
+        if city not in ['сегодня', 'завтра', 'сейчас', 'на', 'в']:
+            return city
+    
+    return None
+
 def get_weather(city: str):
     """Получает погоду для указанного города"""
     try:
@@ -286,16 +315,21 @@ def get_weather(city: str):
                     wind = data['wind']['speed']
                     weather_desc = data['weather'][0]['description']
                     return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
+            elif response.status_code == 404:
+                # Если город не найден, пробуем через веб
+                weather_data = search_web_for_weather(city)
+                if weather_data:
+                    return weather_data
         
         # Если нет ключа или API не сработал, используем веб-поиск
         weather_data = search_web_for_weather(city)
         if weather_data:
             return weather_data
         
-        return f"Не могу найти погоду для {city}. Проверь название."
+        return f"Не могу найти погоду для '{city}'. Проверь название города."
             
     except Exception as e:
-        return f"Ошибка: {e}"
+        return f"Ошибка получения погоды: {e}"
 
 # ============================================================
 # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СТИЛИЗАЦИИ ОТВЕТОВ =====
@@ -393,7 +427,8 @@ async def cmd_start(message: types.Message):
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- погода в Москве\n\n"
+        "- какая погода в Чите\n"
+        "- в Чите погода\n\n"
         "Вопросы (поиск в интернете):\n"
         "- что такое квантовый компьютер\n"
         "- кто такой Эйнштейн\n"
@@ -443,7 +478,8 @@ async def cmd_help(message: types.Message):
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- погода в Москве\n\n"
+        "- какая погода в Чите\n"
+        "- в Чите погода\n\n"
         "Вопросы (поиск в интернете):\n"
         "- что такое квантовый компьютер\n"
         "- кто такой Эйнштейн\n"
@@ -487,20 +523,21 @@ async def handle_text(message: types.Message):
     if text.startswith('/'):
         return
 
-    # === ПОГОДА (исправлено) ===
+    # === ПОГОДА (УЛУЧШЕННАЯ) ===
     if "погода" in text.lower():
-        # Ищем город после "погода в"
-        city_match = re.search(r'погода в (.+)', text.lower())
-        if city_match:
-            city = city_match.group(1).strip()
-        else:
-            # Если город не указан, пробуем найти в конце фразы
-            # Например: "какая погода в чите"
-            city_match2 = re.search(r'в (\w+)', text.lower())
-            if city_match2 and city_match2.group(1) not in ['погода', 'погоду']:
-                city = city_match2.group(1).strip()
+        # Извлекаем город
+        city = extract_city_from_query(text)
+        
+        if not city:
+            # Если город не найден, пробуем найти любое слово после "в"
+            match = re.search(r'\bв\s+([а-яё\s-]+?)(?:\s|$)', text.lower())
+            if match:
+                city = match.group(1).strip()
+                # Проверяем, что это не служебное слово
+                if city in ['сегодня', 'завтра', 'сейчас', 'этом']:
+                    city = "Москва"
             else:
-                city = "Москва"  # Дефолтный город
+                city = "Москва"
         
         weather = get_weather(city)
         await message.answer(style_response(weather, "weather"))
