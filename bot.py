@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
-from aiogram.filters import Command
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
 
 from gigachat import GigaChat
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -53,7 +53,7 @@ print("Все библиотеки загружены, токены найден
 # ===== СОЗДАЕМ БОТА =====
 # ============================================================
 bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
 # Инициализация GigaChat
 ai_client = GigaChat(
@@ -461,9 +461,9 @@ async def check_inactivity():
                 last_message_time[user_id] = now
 
 # ============================================================
-# ===== КОМАНДЫ =====
+# ===== КОМАНДЫ (ДЛЯ AIOGRAM 2.x) =====
 # ============================================================
-@dp.message(Command("start"))
+@dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -489,7 +489,7 @@ async def cmd_start(message: types.Message):
         "- какая погода в Чите"
     )
 
-@dp.message(Command("meme"))
+@dp.message_handler(commands=['meme'])
 async def cmd_meme(message: types.Message):
     """Отправляет мем по запросу"""
     if not is_allowed(message.from_user.id):
@@ -520,7 +520,7 @@ async def cmd_meme(message: types.Message):
             f"Не нашёл ничего про {topic}. Попробуй другую тему или просто /meme для случайного мема."
         )
 
-@dp.message(Command("reminders"))
+@dp.message_handler(commands=['reminders'])
 async def cmd_reminders(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -537,7 +537,7 @@ async def cmd_reminders(message: types.Message):
     
     await message.answer(style_response(text, "list"))
 
-@dp.message(Command("clear"))
+@dp.message_handler(commands=['clear'])
 async def cmd_clear(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -546,7 +546,7 @@ async def cmd_clear(message: types.Message):
     user_history[user_id] = []
     await message.answer("Стёр нашу переписку. Мне не жалко.")
 
-@dp.message(Command("help"))
+@dp.message_handler(commands=['help'])
 async def cmd_help(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -572,7 +572,7 @@ async def cmd_help(message: types.Message):
         "/meme [тема] — найти мем (например: /meme коты)"
     )
 
-@dp.message(Command("del_remind"))
+@dp.message_handler(commands=['del_remind'])
 async def cmd_del_remind(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -589,9 +589,9 @@ async def cmd_del_remind(message: types.Message):
         await message.answer("Ошибка. Напиши: /del_remind ID")
 
 # ============================================================
-# ===== ОБРАБОТЧИК ФОТО (НОВЫЙ - ПРОСТО ОТВЕЧАЕТ) =====
+# ===== ОБРАБОТЧИК ФОТО =====
 # ============================================================
-@dp.message(lambda message: message.photo)
+@dp.message_handler(content_types=['photo'])
 async def handle_photo(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -611,7 +611,7 @@ async def handle_photo(message: types.Message):
 # ============================================================
 # ===== ОБРАБОТЧИК ТЕКСТА =====
 # ============================================================
-@dp.message(lambda message: message.text)
+@dp.message_handler(content_types=['text'])
 async def handle_text(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -713,7 +713,7 @@ async def main():
     print(f"Бот @{bot_info.username} готов!")
     
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling()
     finally:
         scheduler.shutdown()
         inactivity_scheduler.shutdown()
