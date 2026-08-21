@@ -119,7 +119,6 @@ def search_meme(query: str) -> list:
     Возвращает список URL-адресов картинок
     """
     try:
-        # Ищем картинки по запросу
         search_query = f"{query} мем"
         url = f"https://api.duckduckgo.com/?q={quote_plus(search_query)}&format=json&no_html=1&skip_disambig=1"
         
@@ -130,28 +129,17 @@ def search_meme(query: str) -> list:
         if response.status_code == 200:
             data = response.json()
             
-            # Собираем ссылки на картинки из RelatedTopics
             image_urls = []
             
-            # Пробуем найти картинки в RelatedTopics
             if data.get('RelatedTopics'):
                 for topic in data['RelatedTopics'][:10]:
-                    if topic.get('Text') and 'img' in str(topic):
-                        # Пробуем извлечь URL картинки
+                    if topic.get('Text'):
                         text = str(topic)
-                        # Ищем ссылки на картинки
                         img_matches = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp)', text)
                         if img_matches:
                             image_urls.extend(img_matches)
             
-            # Если ничего не нашли через DuckDuckGo, пробуем через Яндекс.Картинки (альтернативный способ)
-            if not image_urls:
-                # Используем wttr.in как запасной вариант для демонстрации
-                # В реальности можно использовать другие бесплатные API
-                pass
-            
-            # Возвращаем найденные URL
-            return image_urls[:5]  # Максимум 5 картинок
+            return image_urls[:5]
         
         return []
         
@@ -163,20 +151,18 @@ def get_random_meme(query: str) -> str:
     """
     Ищет и возвращает случайный мем по запросу
     """
-    # Пробуем найти через DuckDuckGo
     memes = search_meme(query)
     
     if memes:
         return random.choice(memes)
     
-    # Если ничего не нашли, возвращаем ссылку на заглушку
     return None
 
 # ============================================================
 # ===== ВЕБ-ПОИСК =====
 # ============================================================
 def search_web(query: str) -> str:
-    """Выполняет поиск через DuckDuckGo (без API ключа)"""
+    """Выполняет поиск через DuckDuckGo"""
     try:
         url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
         
@@ -258,7 +244,6 @@ def is_web_search_needed(query: str) -> bool:
     """Определяем, нужен ли веб-поиск"""
     query_lower = query.lower()
     
-    # НЕ отправляем в поиск банальные вопросы
     casual_phrases = [
         'как дела', 'что делаешь', 'как ты', 'привет', 'здравствуй',
         'пока', 'до свидания', 'спокойной ночи', 'доброе утро',
@@ -270,7 +255,6 @@ def is_web_search_needed(query: str) -> bool:
         if phrase in query_lower:
             return False
     
-    # Список ключевых слов для веб-поиска
     web_keywords = [
         'что такое', 'кто такой', 'где находится', 'когда', 'сколько',
         'новости', 'завтра', 'вчера', 'курс', 'цена',
@@ -335,21 +319,18 @@ def extract_city_from_query(text: str) -> str:
     """Извлекает название города из запроса о погоде"""
     text_lower = text.lower()
     
-    # Паттерн 1: "погода в [городе]"
     match = re.search(r'погода\s+в\s+([а-яё\s-]+)', text_lower)
     if match:
         city = match.group(1).strip()
         city = re.sub(r'\s*(сегодня|завтра|сейчас|на\s+сегодня|на\s+завтра)$', '', city)
         return city
     
-    # Паттерн 2: "в [городе] погода"
     match = re.search(r'в\s+([а-яё\s-]+)\s+погода', text_lower)
     if match:
         city = match.group(1).strip()
         city = re.sub(r'\s*(сегодня|завтра|сейчас|на\s+сегодня|на\s+завтра)$', '', city)
         return city
     
-    # Паттерн 3: "погода [город]" (без "в")
     match = re.search(r'погода\s+([а-яё\s-]+)', text_lower)
     if match:
         city = match.group(1).strip()
@@ -514,14 +495,11 @@ async def cmd_meme(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
     
-    # Разбираем команду: /meme или /meme коты
     parts = message.text.split(maxsplit=1)
     topic = parts[1].strip() if len(parts) > 1 else "мем"
     
-    # Отправляем сообщение, что ищем
     await message.answer(f"Секунду, ищу мем про {topic}...")
     
-    # Ищем мем
     meme_url = get_random_meme(topic)
     
     if meme_url:
@@ -611,7 +589,7 @@ async def cmd_del_remind(message: types.Message):
         await message.answer("Ошибка. Напиши: /del_remind ID")
 
 # ============================================================
-# ===== ОБРАБОТЧИК ФОТО =====
+# ===== ОБРАБОТЧИК ФОТО (НОВЫЙ - ПРОСТО ОТВЕЧАЕТ) =====
 # ============================================================
 @dp.message(lambda message: message.photo)
 async def handle_photo(message: types.Message):
