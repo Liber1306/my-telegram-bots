@@ -111,12 +111,8 @@ CHARACTER_PROMPT = (
 # ===== ВЕБ-ПОИСК (БЕСПЛАТНЫЙ) =====
 # ============================================================
 def search_web(query: str) -> str:
-    """
-    Выполняет поиск через DuckDuckGo (без API ключа)
-    Возвращает краткую выдержку из результатов
-    """
+    """Выполняет поиск через DuckDuckGo (без API ключа)"""
     try:
-        # Используем DuckDuckGo Instant Answer API (бесплатно)
         url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
         
         response = requests.get(url, timeout=10, headers={
@@ -126,42 +122,36 @@ def search_web(query: str) -> str:
         if response.status_code == 200:
             data = response.json()
             
-            # Собираем информацию из разных источников
             results = []
             
-            # Abstract (краткое описание)
             if data.get('Abstract'):
                 results.append(data['Abstract'])
             
-            # Answer (прямой ответ)
             if data.get('Answer'):
                 results.append(data['Answer'])
             
-            # Definition (определение)
             if data.get('Definition'):
                 results.append(data['Definition'])
             
-            # Related topics (связанные темы)
             if data.get('RelatedTopics'):
                 for topic in data['RelatedTopics'][:3]:
                     if topic.get('Text'):
                         results.append(topic['Text'])
             
             if results:
-                return ' '.join(results[:3])[:1000]  # Ограничиваем длину
+                return ' '.join(results[:3])[:1000]
             
-            # Если ничего не нашли, пробуем поискать через Wikipedia
             wiki_result = search_wikipedia(query)
             if wiki_result:
                 return wiki_result
                 
-            return "Не нашёл информации. Попробуй переформулировать вопрос."
+            return None
         else:
-            return f"Ошибка поиска: {response.status_code}"
+            return None
             
     except Exception as e:
         print(f"Ошибка веб-поиска: {e}")
-        return f"Ошибка: {e}"
+        return None
 
 def search_wikipedia(query: str) -> str:
     """Поиск в Wikipedia через API"""
@@ -180,7 +170,6 @@ def search_wikipedia(query: str) -> str:
 def search_web_for_weather(city: str) -> str:
     """Специальный поиск погоды через веб"""
     try:
-        # Пробуем wttr.in (бесплатно)
         city_encoded = quote_plus(city)
         wttr_url = f"https://wttr.in/{city_encoded}?format=%C+%t+%w&lang=ru"
         response = requests.get(wttr_url, timeout=10)
@@ -189,7 +178,6 @@ def search_web_for_weather(city: str) -> str:
             if data and "Unknown" not in data:
                 return f"Погода в {city}: {data}"
         
-        # Если wttr.in не сработал, пробуем DuckDuckGo
         ddg_url = f"https://api.duckduckgo.com/?q=погода+{quote_plus(city)}&format=json&no_html=1"
         response = requests.get(ddg_url, timeout=10)
         if response.status_code == 200:
@@ -197,22 +185,35 @@ def search_web_for_weather(city: str) -> str:
             if data.get('Abstract'):
                 return f"Погода в {city}: {data['Abstract']}"
         
-        return f"Не могу найти погоду для {city}. Проверь название."
+        return None
     except Exception as e:
-        return f"Ошибка: {e}"
+        return None
 
 def is_web_search_needed(query: str) -> bool:
-    """Определяем, нужен ли веб-поиск"""
+    """Определяем, нужен ли веб-поиск (только для информационных вопросов)"""
+    query_lower = query.lower()
+    
+    # НЕ отправляем в поиск банальные вопросы
+    casual_phrases = [
+        'как дела', 'что делаешь', 'как ты', 'привет', 'здравствуй',
+        'пока', 'до свидания', 'спокойной ночи', 'доброе утро',
+        'добрый день', 'добрый вечер', 'как жизнь', 'что нового',
+        'как настроение', 'ты тут', 'эй', 'дилан'
+    ]
+    
+    for phrase in casual_phrases:
+        if phrase in query_lower:
+            return False
+    
     # Список ключевых слов для веб-поиска
     web_keywords = [
         'что такое', 'кто такой', 'где находится', 'когда', 'сколько',
-        'новости', 'сегодня', 'завтра', 'вчера', 'курс', 'цена',
+        'новости', 'завтра', 'вчера', 'курс', 'цена',
         'сколько стоит', 'как сделать', 'как работает', 'почему',
         'что значит', 'перевод', 'синоним', 'определение',
-        'история', 'факт', 'информация', 'данные'
+        'история', 'факт', 'информация', 'данные', 'население',
+        'столица', 'президент', 'год', 'дата', 'расстояние'
     ]
-    
-    query_lower = query.lower()
     
     # Проверяем, есть ли ключевые слова
     for keyword in web_keywords:
@@ -227,54 +228,6 @@ def is_web_search_needed(query: str) -> bool:
     
     return False
 
-# ============================================================
-# ===== БЕЛЫЙ СПИСОК =====
-# ============================================================
-ALLOWED_USERS = [2084482777, 7798113843]
-
-def is_allowed(user_id: int) -> bool:
-    return user_id in ALLOWED_USERS
-
-# ============================================================
-# ===== ХРАНИЛИЩЕ ИСТОРИИ =====
-# ============================================================
-user_history = {}
-
-# ============================================================
-# ===== ПОГОДА (сначала OpenWeather, потом веб) =====
-# ============================================================
-def get_weather(city: str):
-    """Получает погоду: сначала через API, потом через веб"""
-    try:
-        city_encoded = quote_plus(city)
-        
-        # Если есть API ключ, используем OpenWeatherMap
-        if WEATHER_API_KEY:
-            url = f"https://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('main'):
-                    temp = data['main']['temp']
-                    feels_like = data['main']['feels_like']
-                    humidity = data['main']['humidity']
-                    wind = data['wind']['speed']
-                    weather_desc = data['weather'][0]['description']
-                    return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
-            elif response.status_code == 404:
-                # Если город не найден, пробуем через веб
-                return search_web_for_weather(city)
-        
-        # Если нет ключа или API не сработал, используем веб-поиск
-        return search_web_for_weather(city)
-            
-    except Exception as e:
-        return f"Ошибка: {e}"
-
-# ============================================================
-# ===== ОБРАБОТЧИК ДЛЯ ВЕБ-ПОИСКА С ИИ =====
-# ============================================================
 def process_with_web_search(query: str, search_result: str) -> str:
     """Обрабатывает запрос с результатами поиска через GigaChat"""
     try:
@@ -299,6 +252,52 @@ def process_with_web_search(query: str, search_result: str) -> str:
         return f"Ну... я нашёл это: {search_result[:500]}... Остальное сам гугли."
 
 # ============================================================
+# ===== БЕЛЫЙ СПИСОК =====
+# ============================================================
+ALLOWED_USERS = [2084482777, 7798113843]
+
+def is_allowed(user_id: int) -> bool:
+    return user_id in ALLOWED_USERS
+
+# ============================================================
+# ===== ХРАНИЛИЩЕ ИСТОРИИ =====
+# ============================================================
+user_history = {}
+
+# ============================================================
+# ===== ПОГОДА (исправлено - определяет город) =====
+# ============================================================
+def get_weather(city: str):
+    """Получает погоду для указанного города"""
+    try:
+        city_encoded = quote_plus(city.strip())
+        
+        # Если есть API ключ, используем OpenWeatherMap
+        if WEATHER_API_KEY:
+            url = f"https://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('main'):
+                    temp = data['main']['temp']
+                    feels_like = data['main']['feels_like']
+                    humidity = data['main']['humidity']
+                    wind = data['wind']['speed']
+                    weather_desc = data['weather'][0]['description']
+                    return f"Погода в {city}: {weather_desc}, температура {temp}°C (ощущается как {feels_like}°C), ветер {wind} м/с, влажность {humidity}%"
+        
+        # Если нет ключа или API не сработал, используем веб-поиск
+        weather_data = search_web_for_weather(city)
+        if weather_data:
+            return weather_data
+        
+        return f"Не могу найти погоду для {city}. Проверь название."
+            
+    except Exception as e:
+        return f"Ошибка: {e}"
+
+# ============================================================
 # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СТИЛИЗАЦИИ ОТВЕТОВ =====
 # ============================================================
 def style_response(text: str, action: str = "info") -> str:
@@ -311,7 +310,6 @@ def style_response(text: str, action: str = "info") -> str:
         "weather": f"Погода? Серьёзно? Ну ладно... {text}",
         "error": f"Боже, опять ты... {text}",
         "clear": f"Стёр. Забудь. {text}",
-        "search": f"Сейчас гляну... {text}",
     }
     return styles.get(action, text)
 
@@ -489,13 +487,20 @@ async def handle_text(message: types.Message):
     if text.startswith('/'):
         return
 
-    # === ПОГОДА ===
+    # === ПОГОДА (исправлено) ===
     if "погода" in text.lower():
+        # Ищем город после "погода в"
         city_match = re.search(r'погода в (.+)', text.lower())
         if city_match:
             city = city_match.group(1).strip()
         else:
-            city = "Москва"
+            # Если город не указан, пробуем найти в конце фразы
+            # Например: "какая погода в чите"
+            city_match2 = re.search(r'в (\w+)', text.lower())
+            if city_match2 and city_match2.group(1) not in ['погода', 'погоду']:
+                city = city_match2.group(1).strip()
+            else:
+                city = "Москва"  # Дефолтный город
         
         weather = get_weather(city)
         await message.answer(style_response(weather, "weather"))
@@ -518,26 +523,21 @@ async def handle_text(message: types.Message):
             )
             return
 
-    # === ВЕБ-ПОИСК (НОВЫЙ ФУНКЦИОНАЛ) ===
+    # === ВЕБ-ПОИСК (только для информационных вопросов) ===
     if is_web_search_needed(text):
-        # Отправляем сообщение "печатает"
-        await message.answer("Секунду, гуглю...")
-        
-        # Ищем информацию
+        # Ищем информацию (без лишних сообщений)
         search_results = search_web(text)
         
-        # Если нашли что-то полезное
-        if search_results and "Не нашёл" not in search_results and "Ошибка" not in search_results:
+        if search_results:
             # Обрабатываем через ИИ
             final_response = process_with_web_search(text, search_results)
-            await message.answer(style_response(final_response, "search"))
+            await message.answer(final_response)
             return
         else:
-            # Если ничего не нашли, просто отвечаем как обычно
-            await message.answer(style_response("Ничего не нашёл по твоему запросу. Попробуй переформулировать.", "error"))
-            return
+            # Если ничего не нашли, отправляем в обычный диалог
+            pass  # Продолжаем к обычному диалогу
 
-    # === ОБЫЧНЫЙ ДИАЛОГ С ИИ (без поиска) ===
+    # === ОБЫЧНЫЙ ДИАЛОГ С ИИ ===
     if user_id not in user_history:
         user_history[user_id] = []
 
