@@ -57,11 +57,12 @@ print("Все библиотеки загружены, токены найден
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Инициализация GigaChat (для версии 0.2.3)
+# Инициализация GigaChat (с новым URL и моделью)
 ai_client = GigaChat(
     credentials=GIGACHAT_CREDENTIALS,
     verify_ssl_certs=False,
-    model="GigaChat-2-Pro"
+    model="GigaChat-2-Pro",
+    base_url="https://api.giga.chat/v1"  # Новый URL
 )
 
 print("GigaChat подключён!")
@@ -284,24 +285,24 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
         # 2. Открываем изображение и сжимаем
         image = Image.open(BytesIO(file_bytes.getvalue()))
         
-        # Изменяем размер
+        # Изменяем размер до разумного (максимум 1024x1024)
         max_size = 1024
         if image.width > max_size or image.height > max_size:
             image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         
-        # Сохраняем с сжатием
+        # Сохраняем с высоким сжатием (качество 60%)
         output = BytesIO()
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         image.save(output, format='JPEG', quality=60, optimize=True)
         output.seek(0)
         
-        # 3. Конвертируем в base64
+        # 3. Конвертируем в base64 (уже сжатое)
         image_base64 = base64.b64encode(output.getvalue()).decode('utf-8')
         
         print(f"Размер base64: {len(image_base64)} символов")
         
-        # 4. Формируем запрос для GigaChat (content должен быть строкой!)
+        # 4. Формируем запрос для GigaChat (ПРАВИЛЬНЫЙ формат для версии 0.2.3)
         messages = [
             {
                 "role": "system",
@@ -309,7 +310,18 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
             },
             {
                 "role": "user",
-                "content": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках.\n\nВот изображение: data:image/jpeg;base64,{image_base64}"
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
             }
         ]
         
