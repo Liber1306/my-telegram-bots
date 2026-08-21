@@ -1,7 +1,6 @@
-aiogram
-gigachat
-apscheduler
-pytz
-python-dotenv
-requests
-Pillow
+aiogram==2.25.1
+gigachat==0.2.3
+apscheduler==3.10.4
+pytz==2024.1
+python-dotenv==1.0.1
+requests==2.31.0

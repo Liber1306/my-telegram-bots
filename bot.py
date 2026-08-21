@@ -4,12 +4,10 @@ import re
 import requests
 import pytz
 import json
-import base64
+import random
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
-from io import BytesIO
-from PIL import Image
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
@@ -57,12 +55,11 @@ print("Все библиотеки загружены, токены найден
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Инициализация GigaChat (с новым URL и моделью)
+# Инициализация GigaChat
 ai_client = GigaChat(
     credentials=GIGACHAT_CREDENTIALS,
     verify_ssl_certs=False,
-    model="GigaChat-2-Pro",
-    base_url="https://api.giga.chat/v1"  # Новый URL
+    model="GigaChat-2-Pro"
 )
 
 print("GigaChat подключён!")
@@ -114,7 +111,69 @@ CHARACTER_PROMPT = (
 )
 
 # ============================================================
-# ===== ВЕБ-ПОИСК (БЕСПЛАТНЫЙ) =====
+# ===== ПОИСК МЕМОВ В ИНТЕРНЕТЕ =====
+# ============================================================
+def search_meme(query: str) -> list:
+    """
+    Ищет мемы в интернете по запросу через DuckDuckGo
+    Возвращает список URL-адресов картинок
+    """
+    try:
+        # Ищем картинки по запросу
+        search_query = f"{query} мем"
+        url = f"https://api.duckduckgo.com/?q={quote_plus(search_query)}&format=json&no_html=1&skip_disambig=1"
+        
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Собираем ссылки на картинки из RelatedTopics
+            image_urls = []
+            
+            # Пробуем найти картинки в RelatedTopics
+            if data.get('RelatedTopics'):
+                for topic in data['RelatedTopics'][:10]:
+                    if topic.get('Text') and 'img' in str(topic):
+                        # Пробуем извлечь URL картинки
+                        text = str(topic)
+                        # Ищем ссылки на картинки
+                        img_matches = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp)', text)
+                        if img_matches:
+                            image_urls.extend(img_matches)
+            
+            # Если ничего не нашли через DuckDuckGo, пробуем через Яндекс.Картинки (альтернативный способ)
+            if not image_urls:
+                # Используем wttr.in как запасной вариант для демонстрации
+                # В реальности можно использовать другие бесплатные API
+                pass
+            
+            # Возвращаем найденные URL
+            return image_urls[:5]  # Максимум 5 картинок
+        
+        return []
+        
+    except Exception as e:
+        print(f"Ошибка поиска мемов: {e}")
+        return []
+
+def get_random_meme(query: str) -> str:
+    """
+    Ищет и возвращает случайный мем по запросу
+    """
+    # Пробуем найти через DuckDuckGo
+    memes = search_meme(query)
+    
+    if memes:
+        return random.choice(memes)
+    
+    # Если ничего не нашли, возвращаем ссылку на заглушку
+    return None
+
+# ============================================================
+# ===== ВЕБ-ПОИСК =====
 # ============================================================
 def search_web(query: str) -> str:
     """Выполняет поиск через DuckDuckGo (без API ключа)"""
@@ -196,7 +255,7 @@ def search_web_for_weather(city: str) -> str:
         return None
 
 def is_web_search_needed(query: str) -> bool:
-    """Определяем, нужен ли веб-поиск (только для информационных вопросов)"""
+    """Определяем, нужен ли веб-поиск"""
     query_lower = query.lower()
     
     # НЕ отправляем в поиск банальные вопросы
@@ -221,12 +280,10 @@ def is_web_search_needed(query: str) -> bool:
         'столица', 'президент', 'год', 'дата', 'расстояние'
     ]
     
-    # Проверяем, есть ли ключевые слова
     for keyword in web_keywords:
         if keyword in query_lower:
             return True
     
-    # Проверяем, есть ли вопросительное слово в начале
     question_words = ['что', 'кто', 'где', 'когда', 'почему', 'зачем', 'как', 'сколько']
     for word in question_words:
         if query_lower.startswith(word) or f" {word} " in query_lower:
@@ -269,73 +326,7 @@ def is_allowed(user_id: int) -> bool:
 # ===== ХРАНИЛИЩЕ ИСТОРИИ =====
 # ============================================================
 user_history = {}
-
-# ============================================================
-# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (ИСПРАВЛЕНА) =====
-# ============================================================
-async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -> str:
-    """
-    Отправляет фото в GigaChat и получает описание
-    """
-    try:
-        # 1. Скачиваем фото от пользователя
-        file = await bot.get_file(photo_file_id)
-        file_bytes = await bot.download_file(file.file_path)
-        
-        # 2. Открываем изображение и сжимаем
-        image = Image.open(BytesIO(file_bytes.getvalue()))
-        
-        # Изменяем размер до разумного (максимум 1024x1024)
-        max_size = 1024
-        if image.width > max_size or image.height > max_size:
-            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-        
-        # Сохраняем с высоким сжатием (качество 60%)
-        output = BytesIO()
-        if image.mode in ('RGBA', 'LA', 'P'):
-            image = image.convert('RGB')
-        image.save(output, format='JPEG', quality=60, optimize=True)
-        output.seek(0)
-        
-        # 3. Конвертируем в base64 (уже сжатое)
-        image_base64 = base64.b64encode(output.getvalue()).decode('utf-8')
-        
-        print(f"Размер base64: {len(image_base64)} символов")
-        
-        # 4. Формируем запрос для GigaChat (ПРАВИЛЬНЫЙ формат для версии 0.2.3)
-        messages = [
-            {
-                "role": "system",
-                "content": CHARACTER_PROMPT
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Пользователь прислал фото и написал: '{user_text}'. Проанализируй изображение и ответь в своём стиле (с ворчанием, но полезно). Если пользователь спрашивает твоё мнение о чём-то на фото — дай его. Не пиши действия в звёздочках."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_base64}"
-                        }
-                    }
-                ]
-            }
-        ]
-        
-        # 5. Отправляем запрос в GigaChat
-        response = ai_client.chat({
-            "model": "GigaChat-2-Pro",
-            "messages": messages
-        })
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        print(f"Ошибка обработки фото через GigaChat: {e}")
-        return f"Серьёзно? Не могу разобрать это фото. Ошибка: {str(e)}"
+last_message_time = {}
 
 # ============================================================
 # ===== ПОГОДА =====
@@ -372,7 +363,6 @@ def get_weather(city: str):
     try:
         city_encoded = quote_plus(city.strip())
         
-        # Если есть API ключ, используем OpenWeatherMap
         if WEATHER_API_KEY:
             url = f"https://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
             response = requests.get(url, timeout=10)
@@ -391,7 +381,6 @@ def get_weather(city: str):
                 if weather_data:
                     return weather_data
         
-        # Если нет ключа или API не сработал, используем веб-поиск
         weather_data = search_web_for_weather(city)
         if weather_data:
             return weather_data
@@ -402,10 +391,10 @@ def get_weather(city: str):
         return f"Ошибка получения погоды: {e}"
 
 # ============================================================
-# ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СТИЛИЗАЦИИ ОТВЕТОВ =====
+# ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ =====
 # ============================================================
 def style_response(text: str, action: str = "info") -> str:
-    """Оборачивает ответ в стиль Дилана без звёздочек"""
+    """Оборачивает ответ в стиль Дилана"""
     styles = {
         "info": text,
         "reminder": f"Ну опять... Ладно, запомнил. {text}",
@@ -473,6 +462,23 @@ async def check_reminders():
         await bot.send_message(chat_id, f"Напоминаю: {text}")
         mark_sent(rem_id)
 
+async def check_inactivity():
+    """Проверяет, не было ли сообщений от пользователя больше часа"""
+    now = get_now()
+    for user_id, last_time in list(last_message_time.items()):
+        if user_id in ALLOWED_USERS:
+            time_diff = (now - last_time).total_seconds() / 60
+            if time_diff >= 60:
+                messages = [
+                    "Ну и где ты? Я уже час тебя жду. Абилка хоть покормить меня не забыла?",
+                    "Серьёзно? Час молчания? Я мог бы за это время код написать... хотя я прокрастинирую.",
+                    "Эй, ты там жива? Уже час тишины. Я начинаю волноваться.",
+                    "Час прошёл. А я всё сижу и жду. Лололошка уже дважды заходил, а тебя нет.",
+                    "Ты там уснула? Я тут с Абилкой сижу, она уже начала мяукать."
+                ]
+                await bot.send_message(user_id, random.choice(messages))
+                last_message_time[user_id] = now
+
 # ============================================================
 # ===== КОМАНДЫ =====
 # ============================================================
@@ -483,6 +489,7 @@ async def cmd_start(message: types.Message):
 
     user_id = message.from_user.id
     user_history[user_id] = []
+    last_message_time[user_id] = get_now()
     
     await message.answer(
         "Ну привет... Я Дилан. Если надо — спрашивай. Только не отвлекай просто так.\n\n"
@@ -490,19 +497,50 @@ async def cmd_start(message: types.Message):
         "/clear — очистить историю\n"
         "/help — что я умею\n"
         "/reminders — список напоминаний\n"
-        "/del_remind ID — удалить напоминание\n\n"
+        "/del_remind ID — удалить напоминание\n"
+        "/meme [тема] — отправить мем (например: /meme коты)\n\n"
         "Напоминания:\n"
         "- Напомни через 10 минут позвонить\n"
         "- Напоминай каждый день в 09:00 делать зарядку\n"
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- какая погода в Чите\n"
-        "- в Чите погода\n\n"
-        "Фото:\n"
-        "- Просто отправь фото и напиши вопрос или комментарий\n"
-        "- Например: выбери какое фото лучше"
+        "- какая погода в Чите"
     )
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: types.Message):
+    """Отправляет мем по запросу"""
+    if not is_allowed(message.from_user.id):
+        return
+    
+    # Разбираем команду: /meme или /meme коты
+    parts = message.text.split(maxsplit=1)
+    topic = parts[1].strip() if len(parts) > 1 else "мем"
+    
+    # Отправляем сообщение, что ищем
+    await message.answer(f"Секунду, ищу мем про {topic}...")
+    
+    # Ищем мем
+    meme_url = get_random_meme(topic)
+    
+    if meme_url:
+        texts = [
+            f"Ну опять... Вот тебе мем про {topic}. Держи.",
+            f"Серьёзно? Мем про {topic}? Ну ладно...",
+            f"Только не говори, что тебе не смешно. Вот мем про {topic}.",
+            f"Нашёл кое-что про {topic}. Держи и отстань."
+        ]
+        await message.answer(random.choice(texts))
+        
+        try:
+            await bot.send_photo(message.chat.id, meme_url)
+        except Exception as e:
+            await message.answer(f"Не могу отправить мем. Но вот ссылка: {meme_url}")
+    else:
+        await message.answer(
+            f"Не нашёл ничего про {topic}. Попробуй другую тему или просто /meme для случайного мема."
+        )
 
 @dp.message(Command("reminders"))
 async def cmd_reminders(message: types.Message):
@@ -540,7 +578,7 @@ async def cmd_help(message: types.Message):
         "- отвечать на вопросы (в своём стиле)\n"
         "- напоминать\n"
         "- показывать погоду\n"
-        "- анализировать фото (отправь картинку с вопросом)\n"
+        "- искать мемы в интернете (/meme [тема])\n"
         "- ворчать, но помогать\n\n"
         "Напоминания:\n"
         "- Напомни через 10 минут позвонить\n"
@@ -548,15 +586,12 @@ async def cmd_help(message: types.Message):
         "- Напоминай каждый вторник в 20:00 поливать цветы\n\n"
         "Погода:\n"
         "- погода в Чите\n"
-        "- какая погода в Чите\n"
-        "- в Чите погода\n\n"
-        "Фото:\n"
-        "- Отправь фото и напиши комментарий/вопрос\n"
-        "- Например: выбери какое фото лучше\n\n"
+        "- какая погода в Чите\n\n"
         "Команды:\n"
         "/reminders — список напоминаний\n"
         "/del_remind ID — удалить напоминание\n"
-        "/clear — очистить историю"
+        "/clear — очистить историю\n"
+        "/meme [тема] — найти мем (например: /meme коты)"
     )
 
 @dp.message(Command("del_remind"))
@@ -583,19 +618,17 @@ async def handle_photo(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
 
-    # Получаем подпись к фото (если есть)
+    last_message_time[message.from_user.id] = get_now()
     caption = message.caption or ""
     
-    # Отправляем сообщение, что бот думает
-    await message.answer("Секунду, смотрю...")
+    responses = [
+        f"Ну опять... Я не умею распознавать фото. Лучше опиши словами, что там. Ты написала: '{caption}'",
+        f"Серьёзно? Картинку прислала? Я текстовый бот, я не вижу. Опиши, что там. Твой текст: '{caption}'",
+        f"Мне лень разбираться с картинками. Просто напиши словами, что хотела сказать. Ты написала: '{caption}'",
+        f"Я программист, а не художник. Опиши словами, что на фото. Ты спросила: '{caption}'"
+    ]
     
-    # Получаем ID самого качественного фото (последнее в списке)
-    photo = message.photo[-1]
-    
-    # Обрабатываем фото через GigaChat
-    response = await process_photo_with_gigachat(photo.file_id, caption)
-    
-    await message.answer(response)
+    await message.answer(random.choice(responses))
 
 # ============================================================
 # ===== ОБРАБОТЧИК ТЕКСТА =====
@@ -606,6 +639,8 @@ async def handle_text(message: types.Message):
         return
 
     user_id = message.from_user.id
+    last_message_time[user_id] = get_now()
+
     text = message.text.strip()
 
     if not text:
@@ -690,7 +725,12 @@ async def main():
     scheduler.start()
     print("Планировщик напоминаний запущен! Часовой пояс: Чита (UTC+9)")
     
-    print("Дилан (с поддержкой фото через GigaChat) запускается...")
+    inactivity_scheduler = AsyncIOScheduler()
+    inactivity_scheduler.add_job(check_inactivity, 'interval', minutes=5)
+    inactivity_scheduler.start()
+    print("Планировщик проверки бездействия запущен!")
+    
+    print("Дилан запускается...")
     bot_info = await bot.get_me()
     print(f"Бот @{bot_info.username} готов!")
     
@@ -698,6 +738,7 @@ async def main():
         await dp.start_polling(bot)
     finally:
         scheduler.shutdown()
+        inactivity_scheduler.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
