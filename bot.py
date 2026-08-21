@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
 from io import BytesIO
+from PIL import Image  # 👈 НОВЫЙ ИМПОРТ
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
@@ -268,23 +269,40 @@ def is_allowed(user_id: int) -> bool:
 user_history = {}
 
 # ============================================================
-# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (ИСПРАВЛЕНА ДЛЯ ВЕРСИИ 0.2.3) =====
+# ===== ФУНКЦИЯ ДЛЯ РАБОТЫ С ФОТО (С СЖАТИЕМ) =====
 # ============================================================
 async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -> str:
     """
-    Отправляет фото в GigaChat и получает описание (для версии 0.2.3)
+    Отправляет фото в GigaChat и получает описание (с сжатием)
     """
     try:
         # 1. Скачиваем фото от пользователя
         file = await bot.get_file(photo_file_id)
         file_bytes = await bot.download_file(file.file_path)
         
-        # 2. Конвертируем в base64
-        image_base64 = base64.b64encode(file_bytes.getvalue()).decode('utf-8')
+        # 2. Открываем изображение и сжимаем
+        image = Image.open(BytesIO(file_bytes.getvalue()))
         
-        # 3. Формируем запрос для GigaChat
-        # ВАЖНО: В версии 0.2.3 изображение передается как строка с data:image/jpeg;base64,
-        # а не как отдельный объект image_url
+        # Изменяем размер до разумного (максимум 1024x1024)
+        max_size = 1024
+        if image.width > max_size or image.height > max_size:
+            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        
+        # Сохраняем с высоким сжатием (качество 60%)
+        output = BytesIO()
+        # Определяем формат
+        if image.mode in ('RGBA', 'LA', 'P'):
+            image = image.convert('RGB')
+        image.save(output, format='JPEG', quality=60, optimize=True)
+        output.seek(0)
+        
+        # 3. Конвертируем в base64 (уже сжатое)
+        image_base64 = base64.b64encode(output.getvalue()).decode('utf-8')
+        
+        # Логируем размер для отладки
+        print(f"Размер base64: {len(image_base64)} символов")
+        
+        # 4. Формируем запрос для GigaChat
         messages = [
             {
                 "role": "system",
@@ -296,7 +314,7 @@ async def process_photo_with_gigachat(photo_file_id: str, user_text: str = "") -
             }
         ]
         
-        # 4. Отправляем запрос в GigaChat
+        # 5. Отправляем запрос в GigaChat
         response = ai_client.chat({
             "model": "GigaChat-2-Pro",
             "messages": messages
