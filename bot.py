@@ -110,63 +110,6 @@ CHARACTER_PROMPT = (
 )
 
 # ============================================================
-# ===== ПОИСК РЕАЛЬНЫХ МЕМОВ В ИНТЕРНЕТЕ =====
-# ============================================================
-def search_real_meme(query: str) -> list:
-    """
-    Ищет реальные мемы в интернете через DuckDuckGo
-    Возвращает список URL картинок
-    """
-    try:
-        # Формируем запрос для поиска картинок
-        search_query = f"{query} мем"
-        url = f"https://api.duckduckgo.com/?q={quote_plus(search_query)}&format=json&no_html=1"
-        
-        response = requests.get(url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        if response.status_code == 200:
-            data = response.json()
-            image_urls = []
-            
-            # Ищем ссылки на картинки в RelatedTopics
-            if data.get('RelatedTopics'):
-                for topic in data['RelatedTopics']:
-                    if topic.get('Text'):
-                        text = str(topic)
-                        # Ищем ссылки на изображения
-                        img_matches = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg)[^\s]*', text)
-                        if img_matches:
-                            # Фильтруем мусорные ссылки
-                            for url in img_matches:
-                                if not any(x in url for x in ['google', 'gstatic', 'youtube', 'svg']):
-                                    image_urls.append(url)
-            
-            return image_urls[:5]
-        
-        return []
-        
-    except Exception as e:
-        print(f"Ошибка поиска мемов: {e}")
-        return []
-
-def search_real_meme_by_topic(topic: str) -> str:
-    """
-    Ищет и возвращает случайный мем по теме
-    """
-    if not topic or topic == "мем":
-        # Если тема не указана, пробуем найти просто мем
-        topic = "смешной мем"
-    
-    memes = search_real_meme(topic)
-    
-    if memes:
-        return random.choice(memes)
-    
-    return None
-
-# ============================================================
 # ===== ВЕБ-ПОИСК =====
 # ============================================================
 def search_web(query: str) -> str:
@@ -457,15 +400,16 @@ async def check_inactivity():
     for user_id, last_time in list(last_message_time.items()):
         if user_id in ALLOWED_USERS:
             time_diff = (now - last_time).total_seconds() / 60
-            if time_diff >= 60:
+            if time_diff >= 60:  # 60 минут = 1 час
                 messages = [
                     "Ну и где ты? Я уже час тебя жду. Абилка хоть покормить меня не забыла?",
                     "Серьёзно? Час молчания? Я мог бы за это время код написать... хотя я прокрастинирую.",
                     "Эй, ты там жива? Уже час тишины. Я начинаю волноваться.",
                     "Час прошёл. А я всё сижу и жду. Лололошка уже дважды заходил, а тебя нет.",
-                    "Ты там уснула? Я тут с Абилкой сижу, она уже начала мяукать."
+                    "Ты там уснула? Я тут с Абилкой сижу, она уже начала мяукать. Я тоже хочу есть, кстати."
                 ]
                 await bot.send_message(user_id, random.choice(messages))
+                # Обновляем время, чтобы не спамить каждый час
                 last_message_time[user_id] = now
 
 # ============================================================
@@ -486,8 +430,7 @@ async def cmd_start(message: types.Message):
         "/clear — очистить историю\n"
         "/help — что я умею\n"
         "/reminders — список напоминаний\n"
-        "/del_remind ID — удалить напоминание\n"
-        "/meme [тема] — поискать мем в интернете\n\n"
+        "/del_remind ID — удалить напоминание\n\n"
         "Напоминания:\n"
         "- Напомни через 10 минут позвонить\n"
         "- Напоминай каждый день в 09:00 делать зарядку\n"
@@ -496,41 +439,6 @@ async def cmd_start(message: types.Message):
         "- погода в Чите\n"
         "- какая погода в Чите"
     )
-
-@dp.message_handler(commands=['meme'])
-async def cmd_meme(message: types.Message):
-    """Ищет и отправляет реальный мем из интернета"""
-    if not is_allowed(message.from_user.id):
-        return
-    
-    parts = message.text.split(maxsplit=1)
-    topic = parts[1].strip() if len(parts) > 1 else None
-    
-    if not topic:
-        await message.answer("Секунду, ищу случайный мем...")
-    else:
-        await message.answer(f"Секунду, ищу мем про {topic}...")
-    
-    # Ищем реальный мем в интернете
-    meme_url = search_real_meme_by_topic(topic or "смешной мем")
-    
-    if meme_url:
-        texts = [
-            "Ну опять... Нашёл кое-что. Держи.",
-            "Серьёзно? Мем просить? Ну ладно... Держи.",
-            "Только не говори, что тебе не смешно. Вот мем.",
-            "Нашёл в интернете. Держи и отстань."
-        ]
-        await message.answer(random.choice(texts))
-        
-        try:
-            await bot.send_photo(message.chat.id, meme_url)
-        except Exception as e:
-            await message.answer(f"Не могу отправить картинку, но вот ссылка: {meme_url}")
-    else:
-        await message.answer(
-            "Не нашёл мемов в интернете. Попробуй другую тему или просто /meme для случайного."
-        )
 
 @dp.message_handler(commands=['reminders'])
 async def cmd_reminders(message: types.Message):
@@ -568,7 +476,6 @@ async def cmd_help(message: types.Message):
         "- отвечать на вопросы (в своём стиле)\n"
         "- напоминать\n"
         "- показывать погоду\n"
-        "- искать мемы в интернете (/meme [тема])\n"
         "- ворчать, но помогать\n\n"
         "Напоминания:\n"
         "- Напомни через 10 минут позвонить\n"
@@ -580,8 +487,7 @@ async def cmd_help(message: types.Message):
         "Команды:\n"
         "/reminders — список напоминаний\n"
         "/del_remind ID — удалить напоминание\n"
-        "/clear — очистить историю\n"
-        "/meme [тема] — найти мем (например: /meme коты)"
+        "/clear — очистить историю"
     )
 
 @dp.message_handler(commands=['del_remind'])
@@ -718,7 +624,7 @@ async def main():
     inactivity_scheduler = AsyncIOScheduler()
     inactivity_scheduler.add_job(check_inactivity, 'interval', minutes=5)
     inactivity_scheduler.start()
-    print("Планировщик проверки бездействия запущен!")
+    print("Планировщик проверки бездействия запущен! (проверка каждые 5 минут)")
     
     print("Дилан запускается...")
     bot_info = await bot.get_me()
