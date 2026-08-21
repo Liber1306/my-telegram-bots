@@ -13,7 +13,7 @@ from PIL import Image
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
-from aiogram.filters import Command  # 👈 НОВЫЙ ИМПОРТ для команд
+from aiogram.filters import Command
 
 from gigachat import GigaChat
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -52,10 +52,10 @@ if not GIGACHAT_CREDENTIALS:
 print("Все библиотеки загружены, токены найдены!")
 
 # ============================================================
-# ===== СОЗДАЕМ БОТА (ИСПРАВЛЕНО ДЛЯ AIOGRAM 3.x) =====
+# ===== СОЗДАЕМ БОТА =====
 # ============================================================
 bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher()  # 👈 БЕЗ аргументов!
+dp = Dispatcher()
 
 # Инициализация GigaChat (для версии 0.2.3)
 ai_client = GigaChat(
@@ -464,9 +464,9 @@ async def check_reminders():
         mark_sent(rem_id)
 
 # ============================================================
-# ===== КОМАНДЫ (ИСПРАВЛЕНО ДЛЯ AIOGRAM 3.x) =====
+# ===== КОМАНДЫ =====
 # ============================================================
-@dp.message(Command("start"))  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -494,7 +494,7 @@ async def cmd_start(message: types.Message):
         "- Например: выбери какое фото лучше"
     )
 
-@dp.message(Command("reminders"))  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(Command("reminders"))
 async def cmd_reminders(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -511,7 +511,7 @@ async def cmd_reminders(message: types.Message):
     
     await message.answer(style_response(text, "list"))
 
-@dp.message(Command("clear"))  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(Command("clear"))
 async def cmd_clear(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -520,7 +520,7 @@ async def cmd_clear(message: types.Message):
     user_history[user_id] = []
     await message.answer("Стёр нашу переписку. Мне не жалко.")
 
-@dp.message(Command("help"))  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -549,7 +549,7 @@ async def cmd_help(message: types.Message):
         "/clear — очистить историю"
     )
 
-@dp.message(Command("del_remind"))  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(Command("del_remind"))
 async def cmd_del_remind(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -568,7 +568,7 @@ async def cmd_del_remind(message: types.Message):
 # ============================================================
 # ===== ОБРАБОТЧИК ФОТО =====
 # ============================================================
-@dp.message(lambda message: message.photo)  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(lambda message: message.photo)
 async def handle_photo(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -590,7 +590,7 @@ async def handle_photo(message: types.Message):
 # ============================================================
 # ===== ОБРАБОТЧИК ТЕКСТА =====
 # ============================================================
-@dp.message(lambda message: message.text)  # 👈 НОВЫЙ СИНТАКСИС
+@dp.message(lambda message: message.text)
 async def handle_text(message: types.Message):
     if not is_allowed(message.from_user.id):
         return
@@ -685,7 +685,8 @@ async def main():
     print(f"Бот @{bot_info.username} готов!")
     
     try:
-        await dp.start_polling()
+        # 👇 ИСПРАВЛЕНО: передаем бота в start_polling
+        await dp.start_polling(bot)
     finally:
         scheduler.shutdown()
 
