@@ -389,28 +389,39 @@ def parse_reminder(text: str):
 # ===== ПЛАНИРОВЩИК =====
 # ============================================================
 async def check_reminders():
+    """Проверяет и отправляет напоминания"""
     reminders = get_due_reminders()
+    print(f"Проверка напоминаний: найдено {len(reminders)} напоминаний для отправки")
+    
     for rem_id, chat_id, text, remind_time, repeat_type in reminders:
-        await bot.send_message(chat_id, f"Напоминаю: {text}")
-        mark_sent(rem_id)
+        try:
+            await bot.send_message(chat_id, f"🔔 Напоминаю: {text}")
+            mark_sent(rem_id)
+            print(f"✅ Отправлено напоминание #{rem_id}: {text}")
+        except Exception as e:
+            print(f"❌ Ошибка отправки напоминания #{rem_id}: {e}")
 
 async def check_inactivity():
-    """Проверяет, не было ли сообщений от пользователя больше часа"""
+    """Проверяет, не было ли сообщений от пользователя больше 3 часов"""
     now = get_now()
     for user_id, last_time in list(last_message_time.items()):
         if user_id in ALLOWED_USERS:
-            time_diff = (now - last_time).total_seconds() / 60
-            if time_diff >= 60:  # 60 минут = 1 час
+            time_diff = (now - last_time).total_seconds() / 3600  # в часах
+            if time_diff >= 3:  # 3 часа
                 messages = [
-                    "Ну и где ты? Я уже час тебя жду. Абилка хоть покормить меня не забыла?",
-                    "Серьёзно? Час молчания? Я мог бы за это время код написать... хотя я прокрастинирую.",
-                    "Эй, ты там жива? Уже час тишины. Я начинаю волноваться.",
-                    "Час прошёл. А я всё сижу и жду. Лололошка уже дважды заходил, а тебя нет.",
-                    "Ты там уснула? Я тут с Абилкой сижу, она уже начала мяукать. Я тоже хочу есть, кстати."
+                    "Ну и где ты? Я уже 3 часа тебя жду. Абилка хоть покормить меня не забыла?",
+                    "Серьёзно? 3 часа молчания? Я мог бы за это время код написать... хотя я прокрастинирую.",
+                    "Эй, ты там жива? Уже 3 часа тишины. Я начинаю волноваться.",
+                    "3 часа прошло. А я всё сижу и жду. Лололошка уже пять раз заходил, а тебя нет.",
+                    "Ты там уснула? Я тут с Абилкой сижу, она уже начала мяукать. Я тоже хочу есть, кстати.",
+                    "Три часа прошло... Я уже успел подумать, что ты меня заблокировала. Но я всё равно напишу.",
+                    "Ну серьёзно, 3 часа? Я мог бы за это время посмотреть весь сериал. Но я ждал тебя.",
+                    "Я уже начал привыкать к тишине. Но нет, я всё равно буду ждать. 3 часа — это много."
                 ]
                 await bot.send_message(user_id, random.choice(messages))
-                # Обновляем время, чтобы не спамить каждый час
+                # Обновляем время, чтобы не спамить каждые 3 часа
                 last_message_time[user_id] = now
+                print(f"📤 Отправлено сообщение о бездействии пользователю {user_id}")
 
 # ============================================================
 # ===== КОМАНДЫ =====
@@ -569,6 +580,7 @@ async def handle_text(message: types.Message):
             add_reminder(user_id, task, remind_time, repeat_type)
             msg = f"Напомню в {remind_time} (по времени Читы)"
             await message.answer(style_response(msg, "reminder"))
+            print(f"📝 Добавлено напоминание для {user_id}: {task} на {remind_time} ({repeat_type})")
             return
         else:
             await message.answer(
@@ -616,19 +628,22 @@ async def handle_text(message: types.Message):
 async def main():
     init_db()
     
+    # Планировщик напоминаний (каждую минуту)
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1)
     scheduler.start()
-    print("Планировщик напоминаний запущен! Часовой пояс: Чита (UTC+9)")
+    print("✅ Планировщик напоминаний запущен! (проверка каждую минуту)")
     
+    # Планировщик проверки бездействия (каждые 10 минут)
     inactivity_scheduler = AsyncIOScheduler()
-    inactivity_scheduler.add_job(check_inactivity, 'interval', minutes=5)
+    inactivity_scheduler.add_job(check_inactivity, 'interval', minutes=10)
     inactivity_scheduler.start()
-    print("Планировщик проверки бездействия запущен! (проверка каждые 5 минут)")
+    print("✅ Планировщик проверки бездействия запущен! (проверка каждые 10 минут)")
+    print("⏰ Бот будет писать первым через 3 часа бездействия")
     
-    print("Дилан запускается...")
+    print("🤖 Дилан запускается...")
     bot_info = await bot.get_me()
-    print(f"Бот @{bot_info.username} готов!")
+    print(f"✅ Бот @{bot_info.username} готов!")
     
     try:
         await dp.start_polling()
